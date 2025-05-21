@@ -16,7 +16,7 @@ impl std::fmt::Display for Value {
         let printable = match *self {
             Self::Null => "null",
             Self::Int(n) => &n.to_string(),
-            Self::Float(f) => &f.to_string()
+            Self::Float(f) => &f.to_string(),
         };
         write!(f, "{}", printable)
     }
@@ -69,6 +69,101 @@ impl Interpreter {
             sym_table: HashMap::new(),
         }
     }
+
+    fn binary_op(&mut self, node: &Node, op_strategy: Box<dyn BinaryOp>) -> ResultValue {
+        let [ref left, ref right] = node.children.as_ref().unwrap()[..] else {
+            panic!("Binary op requires 2 children");
+        };
+
+        let l = left.visit(self).unwrap();
+        let r = right.visit(self).unwrap();
+        BinaryContext::new(op_strategy).execute(l, r)
+    }
+}
+
+pub trait BinaryOp {
+    fn calculate(&self, left: Value, right: Value) -> ResultValue;
+}
+
+pub struct AddOp;
+pub struct SubOp;
+pub struct MultOp;
+pub struct DivOp;
+
+impl BinaryOp for AddOp {
+    fn calculate(&self, left: Value, right: Value) -> ResultValue {
+        match (left, right) {
+            (Value::Int(a), Value::Int(b)) => Some(Value::Int(a + b)),
+            (Value::Float(a), Value::Float(b)) => Some(Value::Float(a + b)),
+            (Value::Int(a), Value::Float(b)) => Some(Value::Float(a as f64 + b)),
+            (Value::Float(a), Value::Int(b)) => Some(Value::Float(a + b as f64)),
+            _ => panic!("Type mismatch for +"),
+        }
+    }
+}
+
+impl BinaryOp for SubOp {
+    fn calculate(&self, left: Value, right: Value) -> ResultValue {
+        match (left, right) {
+            (Value::Int(a), Value::Int(b)) => Some(Value::Int(a - b)),
+            (Value::Float(a), Value::Float(b)) => Some(Value::Float(a - b)),
+            (Value::Int(a), Value::Float(b)) => Some(Value::Float(a as f64 - b)),
+            (Value::Float(a), Value::Int(b)) => Some(Value::Float(a - b as f64)),
+            _ => panic!("Type mismatch for +"),
+        }
+    }
+}
+
+impl BinaryOp for MultOp {
+    fn calculate(&self, left: Value, right: Value) -> ResultValue {
+        match (left, right) {
+            (Value::Int(a), Value::Int(b)) => Some(Value::Int(a * b)),
+            (Value::Float(a), Value::Float(b)) => Some(Value::Float(a * b)),
+            (Value::Int(a), Value::Float(b)) => Some(Value::Float(a as f64 * b)),
+            (Value::Float(a), Value::Int(b)) => Some(Value::Float(a * b as f64)),
+            _ => panic!("Type mismatch for *"),
+        }
+    }
+}
+
+impl BinaryOp for DivOp {
+    fn calculate(&self, left: Value, right: Value) -> ResultValue {
+        match right {
+            Value::Int(n) => {
+                if n == 0 {
+                    panic!("Division by zero")
+                }
+            }
+            Value::Float(f) => {
+                if f == 0.0 {
+                    panic!("Division by zero")
+                }
+            }
+            _ => panic!("Invalid type"),
+        };
+
+        match (left, right) {
+            (Value::Int(a), Value::Int(b)) => Some(Value::Int(a / b)),
+            (Value::Float(a), Value::Float(b)) => Some(Value::Float(a / b)),
+            (Value::Int(a), Value::Float(b)) => Some(Value::Float(a as f64 / b)),
+            (Value::Float(a), Value::Int(b)) => Some(Value::Float(a / b as f64)),
+            _ => panic!("Invalid types for *"),
+        }
+    }
+}
+
+pub struct BinaryContext {
+    op: Box<dyn BinaryOp>,
+}
+
+impl BinaryContext {
+    pub fn new(op: Box<dyn BinaryOp>) -> Self {
+        Self { op }
+    }
+
+    pub fn execute(&self, left: Value, right: Value) -> ResultValue {
+        self.op.calculate(left, right)
+    }
 }
 
 impl<'src> Visitor<'src> for Interpreter {
@@ -101,85 +196,19 @@ impl<'src> Visitor<'src> for Interpreter {
     }
 
     fn visit_mult(&mut self, node: &Node) -> ResultValue {
-        let [ref left, ref right] = node.children.as_ref().unwrap()[..] else {
-            panic!("Multiplication requires 2 children");
-        };
-        let left_result = left.visit(self).unwrap();
-        let right_result = right.visit(self).unwrap();
-
-        let value = match (left_result, right_result) {
-            (Value::Int(a), Value::Int(b)) => Value::Int(a * b),
-            (Value::Float(a), Value::Float(b)) => Value::Float(a * b),
-            (Value::Int(a), Value::Float(b)) => Value::Float(a as f64 * b),
-            (Value::Float(a), Value::Int(b)) => Value::Float(a * b as f64),
-            _ => panic!("Invalid types for *"),
-        };
-        Some(value)
+        self.binary_op(node, Box::new(MultOp))
     }
 
     fn visit_div(&mut self, node: &Node) -> ResultValue {
-        let [ref left, ref right] = node.children.as_ref().unwrap()[..] else {
-            panic!("Division requires 2 children");
-        };
-        let left_result = left.visit(self).unwrap();
-        let right_result = right.visit(self).unwrap();
-
-        match right_result {
-            Value::Int(n) => {
-                if n == 0 {
-                    panic!("Division by zero")
-                }
-            }
-            Value::Float(f) => {
-                if f == 0.0 {
-                    panic!("Division by zero")
-                }
-            }
-            _ => panic!("Invalid type"),
-        };
-
-        let value = match (left_result, right_result) {
-            (Value::Int(a), Value::Int(b)) => Value::Int(a * b),
-            (Value::Float(a), Value::Float(b)) => Value::Float(a * b),
-            (Value::Int(a), Value::Float(b)) => Value::Float(a as f64 * b),
-            (Value::Float(a), Value::Int(b)) => Value::Float(a * b as f64),
-            _ => panic!("Invalid types for *"),
-        };
-        Some(value)
+        self.binary_op(node, Box::new(DivOp))
     }
 
     fn visit_add(&mut self, node: &Node) -> ResultValue {
-        let [ref left, ref right] = node.children.as_ref().unwrap()[..] else {
-            panic!("Multiplication requires 2 children");
-        };
-        let left_result = left.visit(self).unwrap();
-        let right_result = right.visit(self).unwrap();
-
-        let value = match (left_result, right_result) {
-            (Value::Int(a), Value::Int(b)) => Value::Int(a + b),
-            (Value::Float(a), Value::Float(b)) => Value::Float(a + b),
-            (Value::Int(a), Value::Float(b)) => Value::Float(a as f64 + b),
-            (Value::Float(a), Value::Int(b)) => Value::Float(a + b as f64),
-            _ => panic!("Invalid types for *"),
-        };
-        Some(value)
+        self.binary_op(node, Box::new(AddOp))
     }
 
     fn visit_sub(&mut self, node: &Node) -> ResultValue {
-        let [ref left, ref right] = node.children.as_ref().unwrap()[..] else {
-            panic!("Multiplication requires 2 children");
-        };
-        let left_result = left.visit(self).unwrap();
-        let right_result = right.visit(self).unwrap();
-
-        let value = match (left_result, right_result) {
-            (Value::Int(a), Value::Int(b)) => Value::Int(a + b),
-            (Value::Float(a), Value::Float(b)) => Value::Float(a + b),
-            (Value::Int(a), Value::Float(b)) => Value::Float(a as f64 + b),
-            (Value::Float(a), Value::Int(b)) => Value::Float(a + b as f64),
-            _ => panic!("Invalid types for *"),
-        };
-        Some(value)
+        self.binary_op(node, Box::new(SubOp))
     }
 
     fn visit_decl(&mut self, node: &Node) -> ResultValue {
