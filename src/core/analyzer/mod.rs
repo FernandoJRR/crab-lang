@@ -27,6 +27,45 @@ pub struct Node {
     pub children: Option<Vec<Self>>,
 }
 
+pub struct NodeBuilder {
+    kind: Option<NodeKind>,
+    span: Option<Span>,
+    children: Option<Vec<Node>>,
+}
+
+impl NodeBuilder {
+    pub fn new() -> Self {
+        NodeBuilder {
+            kind: None,
+            span: None,
+            children: None,
+        }
+    }
+
+    pub fn kind(mut self, kind: NodeKind) -> Self {
+        self.kind = Some(kind);
+        self
+    }
+
+    pub fn span(mut self, span: Span) -> Self {
+        self.span = Some(span);
+        self
+    }
+
+    pub fn children(mut self, children: Vec<Node>) -> Self {
+        self.children = Some(children);
+        self
+    }
+
+    pub fn build(self) -> Node {
+        Node {
+            kind: self.kind.expect("missing kind"),
+            span: self.span.expect("missing span"),
+            children: self.children,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 #[allow(dead_code)]
 pub enum Token<'src> {
@@ -95,13 +134,13 @@ where
                 expr.clone()
                     .delimited_by(just(Token::Ctrl("(")), just(Token::Ctrl(")"))),
             )
-            .map(
-                |((fn_name, fn_span), expr): ((String, SimpleSpan), Node)| Node {
-                    kind: NodeKind::FnCall(fn_name),
-                    span: fn_span.union(expr.span),
-                    children: Some(vec![expr]),
-                },
-            );
+            .map(|((fn_name, fn_span), expr): ((String, SimpleSpan), Node)| {
+                NodeBuilder::new()
+                    .kind(NodeKind::FnCall(fn_name))
+                    .span(fn_span.union(expr.span))
+                    .children(vec![expr])
+                    .build()
+            });
 
         let val = select! {
             Token::Null => NodeKind::Null,
@@ -109,11 +148,7 @@ where
             Token::Float(n) => NodeKind::Float(n),
             Token::Var(n) => NodeKind::Value(n.to_string())
         }
-        .map_with(|expr, e| Node {
-            kind: expr,
-            span: e.span(),
-            children: None,
-        });
+        .map_with(|expr, e| NodeBuilder::new().kind(expr).span(e.span()).build());
 
         let atom = fn_call
             .or(val)
@@ -123,10 +158,12 @@ where
 
         let unary = op(Token::Op("-"))
             .repeated()
-            .foldr(atom, |op: (Token, Span), rhs| Node {
-                kind: NodeKind::Neg,
-                span: op.1.union(rhs.span),
-                children: Some(vec![rhs.clone()]),
+            .foldr(atom, |op: (Token, Span), rhs| {
+                NodeBuilder::new()
+                    .kind(NodeKind::Neg)
+                    .span(op.1.union(rhs.span))
+                    .children(vec![rhs.clone()])
+                    .build()
             });
 
         let product = unary.clone().foldl(
@@ -136,10 +173,12 @@ where
             ))
             .then(unary)
             .repeated(),
-            |lhs, (op, rhs): ((NodeKind, SimpleSpan), Node)| Node {
-                kind: op.0,
-                span: lhs.span.union(rhs.span),
-                children: Some(vec![lhs, rhs]),
+            |lhs, (op, rhs): ((NodeKind, SimpleSpan), Node)| {
+                NodeBuilder::new()
+                    .kind(op.0)
+                    .span(lhs.span.union(rhs.span))
+                    .children(vec![lhs, rhs])
+                    .build()
             },
         );
 
@@ -150,10 +189,12 @@ where
             ))
             .then(product)
             .repeated(),
-            |lhs, (op, rhs): ((NodeKind, SimpleSpan), Node)| Node {
-                kind: op.0,
-                span: lhs.span.union(rhs.span),
-                children: Some(vec![lhs, rhs]),
+            |lhs, (op, rhs): ((NodeKind, SimpleSpan), Node)| {
+                NodeBuilder::new()
+                    .kind(op.0)
+                    .span(lhs.span.union(rhs.span))
+                    .children(vec![lhs, rhs])
+                    .build()
             },
         );
 
@@ -171,22 +212,40 @@ where
         .then_ignore(just(Token::Op("=")))
         .then(expr.clone())
         .then_ignore(just(Token::Ctrl(";")))
-        .map(|(name, rhs)| Node {
-            kind: NodeKind::Decl,
-            span: name.span,
-            children: Some(vec![name, rhs]),
+        .map(|(name, rhs)| {
+            NodeBuilder::new()
+                .kind(NodeKind::Decl)
+                .span(name.span)
+                .children(vec![name, rhs])
+                .build()
         });
 
     let inst = r#let.or(expr);
 
-    inst.repeated().collect::<Vec<_>>().map(|nodes| Node {
-        kind: NodeKind::Insts,
-        span: SimpleSpan {
-            start: 0,
-            end: 0,
-            context: (),
-        },
-        children: Some(nodes),
+    inst.repeated().collect::<Vec<_>>().map(|nodes| {
+        let start_span = match nodes.first() {
+            Some(first_inst) => first_inst.span,
+            None => SimpleSpan {
+                start: 0,
+                end: 0,
+                context: (),
+            },
+        };
+
+        let end_span = match nodes.last() {
+            Some(last_inst) => last_inst.span,
+            None => SimpleSpan {
+                start: 0,
+                end: 0,
+                context: (),
+            },
+        };
+
+        NodeBuilder::new()
+            .kind(NodeKind::Insts)
+            .span(start_span.union(end_span))
+            .children(nodes)
+            .build()
     })
 }
 
