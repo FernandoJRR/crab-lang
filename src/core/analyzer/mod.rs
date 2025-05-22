@@ -249,7 +249,7 @@ where
     })
 }
 
-pub fn analyze<'src>(src: &'src str) -> Option<Node> {
+pub fn analyze(src: &str) -> (Option<Node>, Vec<EmptyErr>) {
     let (tokens, _err) = lexer().parse(src).into_output_errors();
     println!("{:?}", tokens);
 
@@ -261,8 +261,8 @@ pub fn analyze<'src>(src: &'src str) -> Option<Node> {
                     .map((src.len()..src.len()).into(), |(t, s)| (t, s)),
             )
             .into_output_errors();
-        ast
+        (ast, parse_errs)
     } else {
-        None
+        (None, [].to_vec())
     }
 }
