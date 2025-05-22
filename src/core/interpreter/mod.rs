@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, rc::Rc};
 
 use crate::core::analyzer::Node;
 
@@ -59,14 +59,52 @@ impl<'src> Node {
     }
 }
 
+pub trait Callable {
+    fn call(&self, interpreter: &mut Interpreter, args: &[Value]) -> ResultValue;
+}
+
+pub struct PrintFunc;
+
+impl Callable for PrintFunc {
+    fn call(&self, _interpreter: &mut Interpreter, args: &[Value]) -> ResultValue {
+        let v = args
+            .first()
+            .ok_or_else(|| "print: missing argument".to_string())?;
+        println!("{}", v);
+        Ok(None)
+    }
+}
+
+pub struct UserFunc {
+    params: Vec<String>,
+    body: Node,
+}
+
+impl Callable for UserFunc {
+    fn call(&self, interpreter: &mut Interpreter, args: &[Value]) -> ResultValue {
+        if args.len() != self.params.len() {
+            return Err(format!(
+                "Expected {} args, got {}",
+                self.params.len(),
+                args.len()
+            ));
+        }
+        self.body.visit(interpreter)
+    }
+}
+
 pub struct Interpreter {
     pub sym_table: HashMap<String, Value>,
+    func_table: HashMap<String, Rc<dyn Callable>>,
 }
 
 impl Interpreter {
     pub fn new() -> Self {
+        let mut fns: HashMap<String, Rc<dyn Callable>> = HashMap::new();
+        fns.insert("print".to_string(), Rc::new(PrintFunc));
         Self {
             sym_table: HashMap::new(),
+            func_table: fns,
         }
     }
 
@@ -223,7 +261,8 @@ impl<'src> Visitor<'src> for Interpreter {
 
         let value_result = value.visit(self).unwrap();
 
-        self.sym_table.insert(var_name.to_string(), value_result.unwrap());
+        self.sym_table
+            .insert(var_name.to_string(), value_result.unwrap());
 
         Ok(None)
     }
@@ -232,7 +271,7 @@ impl<'src> Visitor<'src> for Interpreter {
         match &node.children {
             Some(children) => {
                 for child in children {
-                    child.visit(self);
+                    let _ = child.visit(self);
                 }
                 Ok(None)
             }
@@ -241,17 +280,22 @@ impl<'src> Visitor<'src> for Interpreter {
     }
 
     fn visit_fn_call(&mut self, node: &Node, fn_name: &'src str) -> ResultValue {
-        let [ref expr] = node.children.as_ref().unwrap()[..] else {
-            panic!("Function call requires 1 children");
+        let args: Vec<Value> = node
+            .children
+            .as_ref()
+            .unwrap_or(&vec![])
+            .iter()
+            .map(|child| child.visit(self))
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .map(|opt| opt.unwrap_or(Value::Null))
+            .collect();
+
+        let func = match self.func_table.get(fn_name).cloned() {
+            Some(f) => f,
+            None => return Err(format!("Unknown function '{}'", fn_name)),
         };
 
-        match fn_name {
-            "print" => {
-                let expr_value = expr.visit(self).unwrap();
-                println!("{}", expr_value.unwrap());
-                Ok(None)
-            }
-            _ => todo!("Custom functions not implemented"),
-        }
+        func.call(self, &args)
     }
 }
