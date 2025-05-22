@@ -22,7 +22,7 @@ impl std::fmt::Display for Value {
     }
 }
 
-type ResultValue = Option<Value>;
+type ResultValue = Result<Option<Value>, String>;
 
 pub trait Visitor<'src> {
     fn visit_null(&mut self, node: &Node) -> ResultValue;
@@ -77,7 +77,7 @@ impl Interpreter {
 
         let l = left.visit(self).unwrap();
         let r = right.visit(self).unwrap();
-        BinaryContext::new(op_strategy).execute(l, r)
+        BinaryContext::new(op_strategy).execute(l.unwrap(), r.unwrap())
     }
 }
 
@@ -93,10 +93,10 @@ pub struct DivOp;
 impl BinaryOp for AddOp {
     fn calculate(&self, left: Value, right: Value) -> ResultValue {
         match (left, right) {
-            (Value::Int(a), Value::Int(b)) => Some(Value::Int(a + b)),
-            (Value::Float(a), Value::Float(b)) => Some(Value::Float(a + b)),
-            (Value::Int(a), Value::Float(b)) => Some(Value::Float(a as f64 + b)),
-            (Value::Float(a), Value::Int(b)) => Some(Value::Float(a + b as f64)),
+            (Value::Int(a), Value::Int(b)) => Ok(Some(Value::Int(a + b))),
+            (Value::Float(a), Value::Float(b)) => Ok(Some(Value::Float(a + b))),
+            (Value::Int(a), Value::Float(b)) => Ok(Some(Value::Float(a as f64 + b))),
+            (Value::Float(a), Value::Int(b)) => Ok(Some(Value::Float(a + b as f64))),
             _ => panic!("Type mismatch for +"),
         }
     }
@@ -105,10 +105,10 @@ impl BinaryOp for AddOp {
 impl BinaryOp for SubOp {
     fn calculate(&self, left: Value, right: Value) -> ResultValue {
         match (left, right) {
-            (Value::Int(a), Value::Int(b)) => Some(Value::Int(a - b)),
-            (Value::Float(a), Value::Float(b)) => Some(Value::Float(a - b)),
-            (Value::Int(a), Value::Float(b)) => Some(Value::Float(a as f64 - b)),
-            (Value::Float(a), Value::Int(b)) => Some(Value::Float(a - b as f64)),
+            (Value::Int(a), Value::Int(b)) => Ok(Some(Value::Int(a - b))),
+            (Value::Float(a), Value::Float(b)) => Ok(Some(Value::Float(a - b))),
+            (Value::Int(a), Value::Float(b)) => Ok(Some(Value::Float(a as f64 - b))),
+            (Value::Float(a), Value::Int(b)) => Ok(Some(Value::Float(a - b as f64))),
             _ => panic!("Type mismatch for +"),
         }
     }
@@ -117,10 +117,10 @@ impl BinaryOp for SubOp {
 impl BinaryOp for MultOp {
     fn calculate(&self, left: Value, right: Value) -> ResultValue {
         match (left, right) {
-            (Value::Int(a), Value::Int(b)) => Some(Value::Int(a * b)),
-            (Value::Float(a), Value::Float(b)) => Some(Value::Float(a * b)),
-            (Value::Int(a), Value::Float(b)) => Some(Value::Float(a as f64 * b)),
-            (Value::Float(a), Value::Int(b)) => Some(Value::Float(a * b as f64)),
+            (Value::Int(a), Value::Int(b)) => Ok(Some(Value::Int(a * b))),
+            (Value::Float(a), Value::Float(b)) => Ok(Some(Value::Float(a * b))),
+            (Value::Int(a), Value::Float(b)) => Ok(Some(Value::Float(a as f64 * b))),
+            (Value::Float(a), Value::Int(b)) => Ok(Some(Value::Float(a * b as f64))),
             _ => panic!("Type mismatch for *"),
         }
     }
@@ -143,10 +143,10 @@ impl BinaryOp for DivOp {
         };
 
         match (left, right) {
-            (Value::Int(a), Value::Int(b)) => Some(Value::Int(a / b)),
-            (Value::Float(a), Value::Float(b)) => Some(Value::Float(a / b)),
-            (Value::Int(a), Value::Float(b)) => Some(Value::Float(a as f64 / b)),
-            (Value::Float(a), Value::Int(b)) => Some(Value::Float(a / b as f64)),
+            (Value::Int(a), Value::Int(b)) => Ok(Some(Value::Int(a / b))),
+            (Value::Float(a), Value::Float(b)) => Ok(Some(Value::Float(a / b))),
+            (Value::Int(a), Value::Float(b)) => Ok(Some(Value::Float(a as f64 / b))),
+            (Value::Float(a), Value::Int(b)) => Ok(Some(Value::Float(a / b as f64))),
             _ => panic!("Invalid types for *"),
         }
     }
@@ -168,20 +168,20 @@ impl BinaryContext {
 
 impl<'src> Visitor<'src> for Interpreter {
     fn visit_null(&mut self, _node: &Node) -> ResultValue {
-        Some(Value::Null)
+        Ok(Some(Value::Null))
     }
 
     fn visit_int(&mut self, _node: &Node, value: u64) -> ResultValue {
-        Some(Value::Int(value))
+        Ok(Some(Value::Int(value)))
     }
 
     fn visit_float(&mut self, _node: &Node, value: f64) -> ResultValue {
-        Some(Value::Float(value))
+        Ok(Some(Value::Float(value)))
     }
 
     fn visit_value(&mut self, _node: &Node, name: &'src str) -> ResultValue {
         match self.sym_table.get(name) {
-            Some(value) => Some(value.clone()),
+            Some(value) => Ok(Some(value.clone())),
             None => panic!("Variable not initialized"),
         }
     }
@@ -189,8 +189,8 @@ impl<'src> Visitor<'src> for Interpreter {
     fn visit_neg(&mut self, node: &Node) -> ResultValue {
         let child = &node.children.as_ref().unwrap()[0];
         match child.visit(self) {
-            Some(Value::Int(n)) => Some(Value::Int(-(n as i64) as u64)),
-            Some(Value::Float(f)) => Some(Value::Float(-f)),
+            Ok(Some(Value::Int(n))) => Ok(Some(Value::Int(-(n as i64) as u64))),
+            Ok(Some(Value::Float(f))) => Ok(Some(Value::Float(-f))),
             _ => panic!("Invalid operand to neg"),
         }
     }
@@ -223,9 +223,9 @@ impl<'src> Visitor<'src> for Interpreter {
 
         let value_result = value.visit(self).unwrap();
 
-        self.sym_table.insert(var_name.to_string(), value_result);
+        self.sym_table.insert(var_name.to_string(), value_result.unwrap());
 
-        None
+        Ok(None)
     }
 
     fn visit_insts(&mut self, node: &Node) -> ResultValue {
@@ -234,9 +234,9 @@ impl<'src> Visitor<'src> for Interpreter {
                 for child in children {
                     child.visit(self);
                 }
-                None
+                Ok(None)
             }
-            None => None,
+            None => Ok(None),
         }
     }
 
@@ -248,8 +248,8 @@ impl<'src> Visitor<'src> for Interpreter {
         match fn_name {
             "print" => {
                 let expr_value = expr.visit(self).unwrap();
-                println!("{}", expr_value);
-                None
+                println!("{}", expr_value.unwrap());
+                Ok(None)
             }
             _ => todo!("Custom functions not implemented"),
         }
