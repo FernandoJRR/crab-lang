@@ -1,10 +1,10 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use super::visitor::Visitor;
-use crate::core::analyzer::{Node, NodeKind};
 use super::builtins::{Callable, PrintFunc};
 use super::ops::*;
+use super::visitor::Visitor;
+use crate::core::analyzer::{Node, NodeKind};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
@@ -44,9 +44,16 @@ impl<'src> Node {
             NodeKind::Insts => visitor.visit_insts(self),
         }
     }
+
+    pub fn visit_children<V: Visitor<'src>>(&'src self, visitor: &mut V) -> ResultValue {
+        if let Some(children) = &self.children {
+            for child in children {
+                child.visit(visitor)?;
+            }
+        }
+        Ok(None)
+    }
 }
-
-
 
 pub struct Interpreter {
     pub sym_table: HashMap<String, Value>,
@@ -167,5 +174,99 @@ impl<'src> Visitor<'src> for Interpreter {
         };
 
         func.call(self, &args)
+    }
+}
+
+pub struct PrettyPrinter {
+    indent: usize,
+}
+
+impl PrettyPrinter {
+    pub fn new() -> Self {
+        PrettyPrinter { indent: 0 }
+    }
+
+    fn indent_str(&self) -> String {
+        " ".repeat(self.indent)
+    }
+
+    fn with_indent<F>(&mut self, f: F) -> ResultValue
+    where
+        F: FnOnce(&mut Self) -> ResultValue,
+    {
+        self.indent += 4;
+        let res = f(self);
+        self.indent -= 4;
+        res
+    }
+}
+
+impl<'src> Visitor<'src> for PrettyPrinter {
+    fn visit_null(&mut self, _node: &Node) -> ResultValue {
+        println!("{}Null", self.indent_str());
+        Ok(Some(Value::Null))
+    }
+
+    fn visit_int(&mut self, _node: &Node, n: u64) -> ResultValue {
+        println!("{}Int({})", self.indent_str(), n);
+        Ok(Some(Value::Null))
+    }
+
+    fn visit_float(&mut self, _node: &Node, f: f64) -> ResultValue {
+        println!("{}Float({})", self.indent_str(), f);
+        Ok(Some(Value::Null))
+    }
+
+    fn visit_value(&mut self, _node: &Node, name: &'src str) -> ResultValue {
+        println!("{}Value({})", self.indent_str(), name);
+        Ok(Some(Value::Null))
+    }
+
+    fn visit_neg(&mut self, node: &Node) -> ResultValue {
+        println!("{}Neg", self.indent_str());
+        let _ = self.with_indent(|v| node.visit_children(v));
+        Ok(Some(Value::Null))
+    }
+
+    fn visit_add(&mut self, node: &Node) -> ResultValue {
+        println!("{}Add", self.indent_str());
+        let _ = self.with_indent(|v| node.visit_children(v));
+        Ok(Some(Value::Null))
+    }
+
+    fn visit_sub(&mut self, node: &Node) -> ResultValue {
+        println!("{}Sub", self.indent_str());
+        let _ = self.with_indent(|v| node.visit_children(v));
+        Ok(Some(Value::Null))
+    }
+
+    fn visit_mult(&mut self, node: &Node) -> ResultValue {
+        println!("{}Mult", self.indent_str());
+        let _ = self.with_indent(|v| node.visit_children(v));
+        Ok(Some(Value::Null))
+    }
+
+    fn visit_div(&mut self, node: &Node) -> ResultValue {
+        println!("{}Div", self.indent_str());
+        let _ = self.with_indent(|v| node.visit_children(v));
+        Ok(Some(Value::Null))
+    }
+
+    fn visit_decl(&mut self, node: &Node) -> ResultValue {
+        println!("{}Decl", self.indent_str());
+        let _ = self.with_indent(|v| node.visit_children(v));
+        Ok(None)
+    }
+
+    fn visit_fn_call(&mut self, node: &Node, fn_name: &'src str) -> ResultValue {
+        println!("{}FnCall({})", self.indent_str(), fn_name);
+        let _ = self.with_indent(|v| node.visit_children(v));
+        Ok(None)
+    }
+
+    fn visit_insts(&mut self, node: &Node) -> ResultValue {
+        println!("{}Insts", self.indent_str());
+        let _ = self.with_indent(|v| node.visit_children(v));
+        Ok(None)
     }
 }

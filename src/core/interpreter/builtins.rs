@@ -1,6 +1,6 @@
 use crate::core::analyzer::Node;
 
-use super::{engine::{ResultValue, Value}, Interpreter};
+use super::{engine::{ResultValue, Value, Interpreter}};
 
 pub trait Callable {
     fn call(&self, interpreter: &mut Interpreter, args: &[Value]) -> ResultValue;
