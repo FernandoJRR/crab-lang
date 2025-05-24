@@ -8,12 +8,22 @@ pub enum NodeKind {
     Null,
     Int(u64),
     Float(f64),
+    Bool(bool),
     Value(String),
     Neg,
     Mult,
     Div,
     Add,
     Sub,
+    Eq,  //Equal
+    Neq, //Not equal
+    Geq, //Greater than or equal
+    Leq, //Lesser than or equal
+    Gth, //Lesser than
+    Lth, //Lesser than
+    Or,
+    And,
+    Not,
     Decl,
     FnCall(String),
 
@@ -72,6 +82,7 @@ pub enum Token<'src> {
     Null,
     Int(u64),
     Float(f64),
+    Bool(bool),
     Var(&'src str),
     Op(&'src str),
     Ctrl(&'src str),
@@ -80,6 +91,15 @@ pub enum Token<'src> {
 
 fn lexer<'src>() -> impl Parser<'src, &'src str, Vec<Spanned<Token<'src>>>> {
     let null = just("null").map(|_: &str| Token::Null).padded();
+
+    let boolean = just("true")
+        .or(just("false"))
+        .map(|b| match b {
+            "true" => Token::Bool(true),
+            "false" => Token::Bool(false),
+            _ => panic!(),
+        })
+        .padded();
 
     let integer = text::int(10)
         .map(|s: &str| Token::Int(s.parse().unwrap()))
@@ -91,7 +111,7 @@ fn lexer<'src>() -> impl Parser<'src, &'src str, Vec<Spanned<Token<'src>>>> {
         .map(|s: &str| Token::Float(s.parse().unwrap()))
         .padded();
 
-    let op = one_of("+*-/=")
+    let op = one_of("+*-=/!><")
         .repeated()
         .at_least(1)
         .to_slice()
@@ -108,7 +128,13 @@ fn lexer<'src>() -> impl Parser<'src, &'src str, Vec<Spanned<Token<'src>>>> {
         _ => Token::Var(var),
     });
 
-    let token = float.or(integer).or(op).or(ctrl).or(null).or(var);
+    let token = float
+        .or(integer)
+        .or(op)
+        .or(ctrl)
+        .or(null)
+        .or(boolean)
+        .or(var);
 
     let comment = just("//")
         .then(any().and_is(just('\n').not()).repeated())
@@ -123,11 +149,11 @@ fn lexer<'src>() -> impl Parser<'src, &'src str, Vec<Spanned<Token<'src>>>> {
         .collect()
 }
 
-pub fn parser<'src, I>() -> impl Parser<'src, I, Node> + Clone
+fn expr_parser<'src, I>() -> impl Parser<'src, I, Node> + Clone
 where
     I: ValueInput<'src, Token = Token<'src>, Span = Span>,
 {
-    let expr = recursive(|expr| {
+    recursive(|expr| {
         let fn_call = select! {Token::Var(fn_n) => fn_n.to_string()}
             .map_with(|expr, e| (expr, e.span()))
             .then(
@@ -146,7 +172,8 @@ where
             Token::Null => NodeKind::Null,
             Token::Int(n) => NodeKind::Int(n),
             Token::Float(n) => NodeKind::Float(n),
-            Token::Var(n) => NodeKind::Value(n.to_string())
+            Token::Var(n) => NodeKind::Value(n.to_string()),
+            Token::Bool(b) => NodeKind::Bool(b)
         }
         .map_with(|expr, e| NodeBuilder::new().kind(expr).span(e.span()).build());
 
@@ -156,15 +183,28 @@ where
 
         let op = |op_tok| just(op_tok).map_with(|op: Token<'_>, e| (op, e.span()));
 
-        let unary = op(Token::Op("-"))
+        let unary_minus =
+            op(Token::Op("-"))
+                .repeated()
+                .foldr(atom.clone(), |op: (Token, Span), rhs| {
+                    NodeBuilder::new()
+                        .kind(NodeKind::Neg)
+                        .span(op.1.union(rhs.span))
+                        .children(vec![rhs.clone()])
+                        .build()
+                });
+
+        let not = op(Token::Op("!"))
             .repeated()
             .foldr(atom, |op: (Token, Span), rhs| {
                 NodeBuilder::new()
-                    .kind(NodeKind::Neg)
+                    .kind(NodeKind::Not)
                     .span(op.1.union(rhs.span))
                     .children(vec![rhs.clone()])
                     .build()
             });
+
+        let unary = unary_minus.or(not);
 
         let product = unary.clone().foldl(
             choice((
@@ -198,8 +238,51 @@ where
             },
         );
 
-        sum
-    });
+        let relational = sum.clone().foldl(
+            choice((
+                op(Token::Op("==")).map(|o| (NodeKind::Eq, o.1)),
+                op(Token::Op("!=")).map(|o| (NodeKind::Neq, o.1)),
+                op(Token::Op(">")).map(|o| (NodeKind::Gth, o.1)),
+                op(Token::Op("<")).map(|o| (NodeKind::Lth, o.1)),
+                op(Token::Op(">=")).map(|o| (NodeKind::Geq, o.1)),
+                op(Token::Op("<=")).map(|o| (NodeKind::Leq, o.1)),
+            ))
+            .then(sum)
+            .repeated(),
+            |lhs, (op, rhs): ((NodeKind, SimpleSpan), Node)| {
+                NodeBuilder::new()
+                    .kind(op.0)
+                    .span(lhs.span.union(rhs.span))
+                    .children(vec![lhs, rhs])
+                    .build()
+            },
+        );
+
+        let logical = relational.clone().foldl(
+            choice((
+                op(Token::Op("||")).map(|o| (NodeKind::Or, o.1)),
+                op(Token::Op("&&")).map(|o| (NodeKind::And, o.1)),
+            ))
+            .then(relational)
+            .repeated(),
+            |lhs, (op, rhs): ((NodeKind, SimpleSpan), Node)| {
+                NodeBuilder::new()
+                    .kind(op.0)
+                    .span(lhs.span.union(rhs.span))
+                    .children(vec![lhs, rhs])
+                    .build()
+            },
+        );
+
+        logical
+    })
+}
+
+pub fn parser<'src, I>() -> impl Parser<'src, I, Node> + Clone
+where
+    I: ValueInput<'src, Token = Token<'src>, Span = Span>,
+{
+    let expr = expr_parser();
 
     let r#let = just(Token::Let)
         .ignore_then(
@@ -251,7 +334,6 @@ where
 
 pub fn analyze(src: &str) -> (Option<Node>, Vec<EmptyErr>) {
     let (tokens, _err) = lexer().parse(src).into_output_errors();
-    println!("{:?}", tokens);
 
     if let Some(tokens) = &tokens {
         let (ast, parse_errs) = parser()

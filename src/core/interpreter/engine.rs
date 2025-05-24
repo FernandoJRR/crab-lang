@@ -11,6 +11,7 @@ pub enum Value {
     Null,
     Int(u64),
     Float(f64),
+    Bool(bool),
 }
 
 impl std::fmt::Display for Value {
@@ -19,41 +20,13 @@ impl std::fmt::Display for Value {
             Self::Null => "null",
             Self::Int(n) => &n.to_string(),
             Self::Float(f) => &f.to_string(),
+            Self::Bool(b) => &b.to_string(),
         };
         write!(f, "{}", printable)
     }
 }
 
 pub type ResultValue = Result<Option<Value>, String>;
-
-impl<'src> Node {
-    pub fn visit<V: Visitor<'src>>(&'src self, visitor: &mut V) -> ResultValue {
-        match &self.kind {
-            NodeKind::Null => visitor.visit_null(self),
-            NodeKind::Int(n) => visitor.visit_int(self, *n),
-            NodeKind::Float(f) => visitor.visit_float(self, *f),
-            NodeKind::Value(name) => visitor.visit_value(self, name),
-            NodeKind::Neg => visitor.visit_neg(self),
-            NodeKind::Mult => visitor.visit_mult(self),
-            NodeKind::Div => visitor.visit_div(self),
-            NodeKind::Add => visitor.visit_add(self),
-            NodeKind::Sub => visitor.visit_sub(self),
-            NodeKind::Decl => visitor.visit_decl(self),
-            NodeKind::FnCall(fn_name) => visitor.visit_fn_call(self, fn_name),
-
-            NodeKind::Insts => visitor.visit_insts(self),
-        }
-    }
-
-    pub fn visit_children<V: Visitor<'src>>(&'src self, visitor: &mut V) -> ResultValue {
-        if let Some(children) = &self.children {
-            for child in children {
-                child.visit(visitor)?;
-            }
-        }
-        Ok(None)
-    }
-}
 
 pub struct Interpreter {
     pub sym_table: HashMap<String, Value>,
@@ -68,6 +41,15 @@ impl Interpreter {
             sym_table: HashMap::new(),
             func_table: fns,
         }
+    }
+
+    fn unary_op(&mut self, node: &Node, op_strategy: Box<dyn UnaryOp>) -> ResultValue {
+        let [ref val] = node.children.as_ref().unwrap()[..] else {
+            panic!("Unary op requires 1 children");
+        };
+
+        let v = val.visit(self).unwrap();
+        UnaryContext::new(op_strategy).execute(v.unwrap())
     }
 
     fn binary_op(&mut self, node: &Node, op_strategy: Box<dyn BinaryOp>) -> ResultValue {
@@ -94,6 +76,10 @@ impl<'src> Visitor<'src> for Interpreter {
         Ok(Some(Value::Float(value)))
     }
 
+    fn visit_bool(&mut self, _node: &Node, value: bool) -> ResultValue {
+        Ok(Some(Value::Bool(value)))
+    }
+
     fn visit_value(&mut self, _node: &Node, name: &'src str) -> ResultValue {
         match self.sym_table.get(name) {
             Some(value) => Ok(Some(value.clone())),
@@ -102,12 +88,11 @@ impl<'src> Visitor<'src> for Interpreter {
     }
 
     fn visit_neg(&mut self, node: &Node) -> ResultValue {
-        let child = &node.children.as_ref().unwrap()[0];
-        match child.visit(self) {
-            Ok(Some(Value::Int(n))) => Ok(Some(Value::Int(-(n as i64) as u64))),
-            Ok(Some(Value::Float(f))) => Ok(Some(Value::Float(-f))),
-            _ => panic!("Invalid operand to neg"),
-        }
+        self.unary_op(node, Box::new(NegOp))
+    }
+
+    fn visit_not(&mut self, node: &Node) -> ResultValue {
+        self.unary_op(node, Box::new(NotOp))
     }
 
     fn visit_mult(&mut self, node: &Node) -> ResultValue {
@@ -124,6 +109,37 @@ impl<'src> Visitor<'src> for Interpreter {
 
     fn visit_sub(&mut self, node: &Node) -> ResultValue {
         self.binary_op(node, Box::new(SubOp))
+    }
+
+    fn visit_eq(&mut self, node: &Node) -> ResultValue {
+        self.binary_op(node, Box::new(EqOp))
+    }
+
+    fn visit_neq(&mut self, node: &Node) -> ResultValue {
+        self.binary_op(node, Box::new(NeqOp))
+    }
+
+    fn visit_greater(&mut self, node: &Node) -> ResultValue {
+        self.binary_op(node, Box::new(GthOp))
+    }
+
+    fn visit_lesser(&mut self, node: &Node) -> ResultValue {
+        self.binary_op(node, Box::new(LthOp))
+    }
+
+    fn visit_greater_eq(&mut self, node: &Node) -> ResultValue {
+        self.binary_op(node, Box::new(GeqOp))
+    }
+
+    fn visit_lesser_eq(&mut self, node: &Node) -> ResultValue {
+        self.binary_op(node, Box::new(LeqOp))
+    }
+
+    fn visit_and(&mut self, node: &Node) -> ResultValue {
+        self.binary_op(node, Box::new(AndOp))
+    }
+    fn visit_or(&mut self, node: &Node) -> ResultValue {
+        self.binary_op(node, Box::new(OrOp))
     }
 
     fn visit_decl(&mut self, node: &Node) -> ResultValue {
@@ -217,6 +233,11 @@ impl<'src> Visitor<'src> for PrettyPrinter {
         Ok(Some(Value::Null))
     }
 
+    fn visit_bool(&mut self, _node: &Node, b: bool) -> ResultValue {
+        println!("{}Bool({})", self.indent_str(), b);
+        Ok(Some(Value::Null))
+    }
+
     fn visit_value(&mut self, _node: &Node, name: &'src str) -> ResultValue {
         println!("{}Value({})", self.indent_str(), name);
         Ok(Some(Value::Null))
@@ -224,6 +245,12 @@ impl<'src> Visitor<'src> for PrettyPrinter {
 
     fn visit_neg(&mut self, node: &Node) -> ResultValue {
         println!("{}Neg", self.indent_str());
+        let _ = self.with_indent(|v| node.visit_children(v));
+        Ok(Some(Value::Null))
+    }
+
+    fn visit_not(&mut self, node: &Node) -> ResultValue {
+        println!("{}Not", self.indent_str());
         let _ = self.with_indent(|v| node.visit_children(v));
         Ok(Some(Value::Null))
     }
@@ -248,6 +275,53 @@ impl<'src> Visitor<'src> for PrettyPrinter {
 
     fn visit_div(&mut self, node: &Node) -> ResultValue {
         println!("{}Div", self.indent_str());
+        let _ = self.with_indent(|v| node.visit_children(v));
+        Ok(Some(Value::Null))
+    }
+
+    fn visit_eq(&mut self, node: &Node) -> ResultValue {
+        println!("{}Eq", self.indent_str());
+        let _ = self.with_indent(|v| node.visit_children(v));
+        Ok(Some(Value::Null))
+    }
+
+    fn visit_neq(&mut self, node: &Node) -> ResultValue {
+        println!("{}Neq", self.indent_str());
+        let _ = self.with_indent(|v| node.visit_children(v));
+        Ok(Some(Value::Null))
+    }
+
+    fn visit_greater(&mut self, node: &Node) -> ResultValue {
+        println!("{}Gth", self.indent_str());
+        let _ = self.with_indent(|v| node.visit_children(v));
+        Ok(Some(Value::Null))
+    }
+
+    fn visit_lesser(&mut self, node: &Node) -> ResultValue {
+        println!("{}Lth", self.indent_str());
+        let _ = self.with_indent(|v| node.visit_children(v));
+        Ok(Some(Value::Null))
+    }
+
+    fn visit_greater_eq(&mut self, node: &Node) -> ResultValue {
+        println!("{}Geq", self.indent_str());
+        let _ = self.with_indent(|v| node.visit_children(v));
+        Ok(Some(Value::Null))
+    }
+
+    fn visit_lesser_eq(&mut self, node: &Node) -> ResultValue {
+        println!("{}Leq", self.indent_str());
+        let _ = self.with_indent(|v| node.visit_children(v));
+        Ok(Some(Value::Null))
+    }
+
+    fn visit_and(&mut self, node: &Node) -> ResultValue {
+        println!("{}And", self.indent_str());
+        let _ = self.with_indent(|v| node.visit_children(v));
+        Ok(Some(Value::Null))
+    }
+    fn visit_or(&mut self, node: &Node) -> ResultValue {
+        println!("{}Or", self.indent_str());
         let _ = self.with_indent(|v| node.visit_children(v));
         Ok(Some(Value::Null))
     }
