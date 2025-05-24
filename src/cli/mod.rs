@@ -4,13 +4,13 @@ pub fn run() {
 
     if args.len() > 1 {
         match args[1].as_str() {
-            "check" => {
+            "run" => {
                 let file_path = args.get(2).unwrap();
                 let src = std::fs::read_to_string(file_path).unwrap();
                 let result = analyzer::analyze(&src);
                 let mut interpreter = Interpreter::new();
                 if let (Some(result), _) = &result {
-                    println!("{:?}", result.visit(&mut interpreter));
+                    let _ = result.visit(&mut interpreter);
                 }
             },
             "print" => {
@@ -19,7 +19,7 @@ pub fn run() {
                 let result = analyzer::analyze(&src);
                 let mut printer = PrettyPrinter::new();
                 if let (Some(result), _) = &result {
-                    println!("{:?}", result.visit(&mut printer));
+                    let _ = result.visit(&mut printer);
                 }
             },
             _ => println!("Unknown command."),
