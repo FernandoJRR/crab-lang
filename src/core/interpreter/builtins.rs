@@ -68,18 +68,14 @@ pub trait Callable {
 pub struct PrintFunc;
 
 impl Callable for PrintFunc {
-    fn call(&self, interpreter: &mut Interpreter, args: &[Value]) -> ResultValue {
-        let dummy_params = vec![];
-        let mut context = CallContext::new(interpreter, args.to_vec(), &dummy_params);
+    fn call(&self, _interpreter: &mut Interpreter, args: &[Value]) -> ResultValue {
+        if args.len() != 1 {
+            return Err(format!("print: expected 1 argument, got {}", args.len()));
+        }
 
-        context.enter()?;
-
-        let v = args
-            .first()
-            .ok_or_else(|| "print: missing argument".to_string())?;
+        let v = &args[0];
         println!("{}", v);
 
-        context.exit();
         Ok(None)
     }
 }
