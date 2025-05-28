@@ -9,9 +9,7 @@ pub fn run() {
                 let src = std::fs::read_to_string(file_path).unwrap();
                 let result = analyzer::analyze(&src);
                 let mut interpreter = Interpreter::new();
-                if let (Some(result), _) = &result {
-                    let _ = result.visit(&mut interpreter);
-                }
+                interpreter.interpret(result);
             },
             "print" => {
                 let file_path = args.get(2).unwrap();

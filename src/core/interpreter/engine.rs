@@ -1,10 +1,13 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use super::builtins::{Callable, PrintFunc};
+use chumsky::error::EmptyErr;
+
+use super::builtins::{Callable, Param, PrintFunc, UserFunc};
 use super::ops::*;
 use super::visitor::Visitor;
-use crate::core::analyzer::{Node, NodeKind};
+use crate::core::analyzer::{Node, NodeKind, Type};
+use crate::core::facade::sym_table::SymTable;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
@@ -12,35 +15,100 @@ pub enum Value {
     Int(u64),
     Float(f64),
     Bool(bool),
+    Type(Type),
+    Params(Vec<Self>),
+    Param(String, Type),
 }
 
 impl std::fmt::Display for Value {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let printable = match *self {
-            Self::Null => "null",
-            Self::Int(n) => &n.to_string(),
-            Self::Float(f) => &f.to_string(),
-            Self::Bool(b) => &b.to_string(),
-        };
-        write!(f, "{}", printable)
+        match self {
+            Value::Null => write!(f, "null"),
+            Value::Int(n) => write!(f, "{}", n),
+            Value::Float(fl) => write!(f, "{}", fl),
+            Value::Bool(b) => write!(f, "{}", b),
+            Value::Type(t) => write!(f, "{}", t),
+            Value::Params(params) => {
+                let formatted_params: Vec<String> = params.iter().map(|p| format!("{}", p)).collect();
+                write!(f, "[{}]", formatted_params.join(", "))
+            },
+            Value::Param(name, ty) => write!(f, "{}: {}", name, ty),
+        }
     }
 }
 
 pub type ResultValue = Result<Option<Value>, String>;
 
 pub struct Interpreter {
-    pub sym_table: HashMap<String, Value>,
+    pub current_scope: Rc<SymTable>,
     func_table: HashMap<String, Rc<dyn Callable>>,
+
+    #[allow(dead_code)]
+    sym_table: Rc<SymTable>,
 }
 
 impl Interpreter {
     pub fn new() -> Self {
         let mut fns: HashMap<String, Rc<dyn Callable>> = HashMap::new();
         fns.insert("print".to_string(), Rc::new(PrintFunc));
+
+        let table = SymTable::new();
         Self {
-            sym_table: HashMap::new(),
+            current_scope: Rc::clone(&table),
+            sym_table: table,
             func_table: fns,
         }
+    }
+
+    pub fn interpret(&mut self, result: (Option<Node>, Vec<EmptyErr>)) {
+        if let (Some(result), _) = &result {
+            let _ = result.visit(self);
+            let _ = match self.func_table.get("main").cloned() {
+                Some(fn_main) => fn_main.call(self, &[]),
+                None => Ok(None),
+            };
+        }
+    }
+
+    pub fn push_scope(&mut self) {
+        let new_scope = SymTable::new_child(Rc::clone(&self.current_scope));
+        self.current_scope = new_scope;
+    }
+
+    pub fn pop_scope(&mut self) {
+        let parent_weak = self.current_scope.parent.borrow().clone();
+        if let Some(parent_rc) = parent_weak.upgrade() {
+            self.current_scope = parent_rc;
+        } else {
+            panic!("Parent scope was dropped");
+        }
+    }
+
+    pub fn set_var(&mut self, name: String, val: Value) {
+        self.current_scope.set(name, val);
+    }
+
+    pub fn get_var(&self, name: &str) -> Option<Value> {
+        self.current_scope.get(name)
+    }
+
+    pub fn define_fn(&mut self, name: String, params: Vec<Value>, body: Node) {
+        let mut params_conv = Vec::with_capacity(params.len());
+        for v in params {
+            match v {
+                Value::Param(n, t) => params_conv.push(Param {
+                    name: n,
+                    var_type: t,
+                }),
+                _ => panic!("expected Value::Param"),
+            }
+        }
+
+        let user_fn = UserFunc {
+            params: params_conv,
+            body,
+        };
+        self.func_table.insert(name, Rc::new(user_fn));
     }
 
     fn unary_op(&mut self, node: &Node, op_strategy: Box<dyn UnaryOp>) -> ResultValue {
@@ -80,8 +148,12 @@ impl<'src> Visitor<'src> for Interpreter {
         Ok(Some(Value::Bool(value)))
     }
 
+    fn visit_type(&mut self, _node: &Node, var_type: Type) -> ResultValue {
+        Ok(Some(Value::Type(var_type)))
+    }
+
     fn visit_value(&mut self, _node: &Node, name: &'src str) -> ResultValue {
-        match self.sym_table.get(name) {
+        match self.get_var(name) {
             Some(value) => Ok(Some(value.clone())),
             None => panic!("Variable not initialized"),
         }
@@ -142,6 +214,63 @@ impl<'src> Visitor<'src> for Interpreter {
         self.binary_op(node, Box::new(OrOp))
     }
 
+    fn visit_fn(&mut self, node: &Node, name: &'src str) -> ResultValue {
+        let children = node.children.as_ref().unwrap();
+        match children.as_slice() {
+            [params_node, body] => {
+                let result_params = params_node.visit(self);
+                match result_params {
+                    Ok(Some(Value::Params(pms))) => {
+                        self.define_fn(name.to_string(), pms, body.clone())
+                    }
+                    _ => panic!("Cannot create function"),
+                }
+            }
+            [params_node, _return_type, body] => {
+                let result_params = params_node.visit(self);
+                match result_params {
+                    Ok(Some(Value::Params(pms))) => {
+                        self.define_fn(name.to_string(), pms, body.clone())
+                    }
+                    _ => panic!("Cannot create function"),
+                }
+            }
+            _ => panic!("Expected 2 to 3 children, got {}", children.len()),
+        }
+
+        Ok(None)
+    }
+
+    fn visit_params(&mut self, node: &Node) -> ResultValue {
+        let children = match &node.children {
+            Some(c) => c,
+            None => return Ok(Some(Value::Params(vec![]))),
+        };
+
+        let mut values = Vec::with_capacity(children.len());
+        for child in children {
+            match child.visit(self)? {
+                Some(v) => values.push(v),
+                None => return Err("Expected value from parameter node".into()),
+            }
+        }
+
+        Ok(Some(Value::Params(values)))
+    }
+
+    fn visit_param(&mut self, node: &Node, name: &'src str) -> ResultValue {
+        let [ref var_type] = node.children.as_ref().unwrap()[..] else {
+            panic!("Param requires 1 child");
+        };
+
+        let var_type = var_type.visit(self).unwrap();
+
+        match var_type {
+            Some(Value::Type(type_var)) => Ok(Some(Value::Param(name.to_string(), type_var))),
+            _ => Err("Not valid".to_string()),
+        }
+    }
+
     fn visit_decl(&mut self, node: &Node) -> ResultValue {
         let [ref name, ref value] = node.children.as_ref().unwrap()[..] else {
             panic!("Declaration requires 2 children");
@@ -154,8 +283,7 @@ impl<'src> Visitor<'src> for Interpreter {
 
         let value_result = value.visit(self).unwrap();
 
-        self.sym_table
-            .insert(var_name.to_string(), value_result.unwrap());
+        self.set_var(var_name.to_string(), value_result.unwrap());
 
         Ok(None)
     }
@@ -240,6 +368,11 @@ impl<'src> Visitor<'src> for PrettyPrinter {
 
     fn visit_value(&mut self, _node: &Node, name: &'src str) -> ResultValue {
         println!("{}Value({})", self.indent_str(), name);
+        Ok(Some(Value::Null))
+    }
+
+    fn visit_type(&mut self, node: &Node, r#type: Type) -> ResultValue {
+        println!("{}Type({})", self.indent_str(), r#type);
         Ok(Some(Value::Null))
     }
 
@@ -328,6 +461,24 @@ impl<'src> Visitor<'src> for PrettyPrinter {
 
     fn visit_decl(&mut self, node: &Node) -> ResultValue {
         println!("{}Decl", self.indent_str());
+        let _ = self.with_indent(|v| node.visit_children(v));
+        Ok(None)
+    }
+
+    fn visit_fn(&mut self, node: &Node, name: &'src str) -> ResultValue {
+        println!("{}Fn({})", self.indent_str(), name);
+        let _ = self.with_indent(|v| node.visit_children(v));
+        Ok(None)
+    }
+
+    fn visit_params(&mut self, node: &Node) -> ResultValue {
+        println!("{}Params", self.indent_str());
+        let _ = self.with_indent(|v| node.visit_children(v));
+        Ok(None)
+    }
+
+    fn visit_param(&mut self, node: &Node, name: &'src str) -> ResultValue {
+        println!("{}Param({})", self.indent_str(), name);
         let _ = self.with_indent(|v| node.visit_children(v));
         Ok(None)
     }

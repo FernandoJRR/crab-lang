@@ -1,4 +1,4 @@
-use crate::core::analyzer::{Node, NodeKind};
+use crate::core::analyzer::{Node, NodeKind, Type};
 
 use super::engine::ResultValue;
 
@@ -8,6 +8,8 @@ pub trait Visitor<'src> {
     fn visit_float(&mut self, node: &Node, value: f64) -> ResultValue;
     fn visit_bool(&mut self, node: &Node, value: bool) -> ResultValue;
     fn visit_value(&mut self, node: &Node, name: &'src str) -> ResultValue;
+    fn visit_type(&mut self, node: &Node, r#type: Type) -> ResultValue;
+
     fn visit_neg(&mut self, node: &Node) -> ResultValue;
     fn visit_not(&mut self, node: &Node) -> ResultValue;
     fn visit_mult(&mut self, node: &Node) -> ResultValue;
@@ -27,6 +29,10 @@ pub trait Visitor<'src> {
 
     fn visit_decl(&mut self, node: &Node) -> ResultValue;
     fn visit_insts(&mut self, node: &Node) -> ResultValue;
+
+    fn visit_fn(&mut self, node: &Node, name: &'src str) -> ResultValue;
+    fn visit_params(&mut self, node: &Node) -> ResultValue;
+    fn visit_param(&mut self, node: &Node, name: &'src str) -> ResultValue;
     fn visit_fn_call(&mut self, node: &Node, fn_name: &'src str) -> ResultValue;
 }
 
@@ -38,6 +44,7 @@ impl<'src> Node {
             NodeKind::Float(f) => visitor.visit_float(self, *f),
             NodeKind::Bool(b) => visitor.visit_bool(self, *b),
             NodeKind::Value(name) => visitor.visit_value(self, name),
+            NodeKind::Type(t) => visitor.visit_type(self, t.clone()),
 
             NodeKind::Neg => visitor.visit_neg(self),
             NodeKind::Not => visitor.visit_not(self),
@@ -57,6 +64,10 @@ impl<'src> Node {
             NodeKind::And => visitor.visit_and(self),
 
             NodeKind::Decl => visitor.visit_decl(self),
+
+            NodeKind::Fn(name) => visitor.visit_fn(self, name),
+            NodeKind::Params => visitor.visit_params(self),
+            NodeKind::Param(name) => visitor.visit_param(self, name),
             NodeKind::FnCall(fn_name) => visitor.visit_fn_call(self, fn_name),
 
             NodeKind::Insts => visitor.visit_insts(self),

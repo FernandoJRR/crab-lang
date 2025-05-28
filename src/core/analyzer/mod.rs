@@ -25,9 +25,32 @@ pub enum NodeKind {
     And,
     Not,
     Decl,
+    Fn(String),
     FnCall(String),
+    Params,
+    Param(String),
+
+    Type(Type),
 
     Insts,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Type {
+    Int,
+    Float,
+    Bool,
+}
+
+impl std::fmt::Display for Type {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let printable = match *self {
+            Self::Int => "int",
+            Self::Float => "float",
+            Self::Bool => "bool",
+        };
+        write!(f, "{}", printable)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -86,7 +109,9 @@ pub enum Token<'src> {
     Var(&'src str),
     Op(&'src str),
     Ctrl(&'src str),
+    Type(Type),
     Let,
+    Fn,
 }
 
 fn lexer<'src>() -> impl Parser<'src, &'src str, Vec<Spanned<Token<'src>>>> {
@@ -98,6 +123,19 @@ fn lexer<'src>() -> impl Parser<'src, &'src str, Vec<Spanned<Token<'src>>>> {
             "true" => Token::Bool(true),
             "false" => Token::Bool(false),
             _ => panic!(),
+        })
+        .padded();
+
+    let var_type = just("int")
+        .or(just("float"))
+        .or(just("bool"))
+        .map(|s| {
+            Token::Type(match s {
+                "int" => Type::Int,
+                "float" => Type::Float,
+                "bool" => Type::Bool,
+                _ => panic!(),
+            })
         })
         .padded();
 
@@ -117,14 +155,13 @@ fn lexer<'src>() -> impl Parser<'src, &'src str, Vec<Spanned<Token<'src>>>> {
         .to_slice()
         .map(Token::Op);
 
-    let ctrl = one_of("()[]{};,")
-        .repeated()
-        .at_least(1)
+    let ctrl = one_of("()[]{};,:")
         .to_slice()
         .map(Token::Ctrl);
 
     let var = text::ascii::ident().map(|var: &str| match var {
         "let" => Token::Let,
+        "fn" => Token::Fn,
         _ => Token::Var(var),
     });
 
@@ -134,6 +171,7 @@ fn lexer<'src>() -> impl Parser<'src, &'src str, Vec<Spanned<Token<'src>>>> {
         .or(ctrl)
         .or(null)
         .or(boolean)
+        .or(var_type)
         .or(var);
 
     let comment = just("//")
@@ -158,13 +196,15 @@ where
             .map_with(|expr, e| (expr, e.span()))
             .then(
                 expr.clone()
+                    .separated_by(just(Token::Ctrl(",")))
+                    .collect::<Vec<_>>()
                     .delimited_by(just(Token::Ctrl("(")), just(Token::Ctrl(")"))),
             )
-            .map(|((fn_name, fn_span), expr): ((String, SimpleSpan), Node)| {
+            .map(|((fn_name, fn_span), params): ((String, SimpleSpan), Vec<Node>)| {
                 NodeBuilder::new()
                     .kind(NodeKind::FnCall(fn_name))
-                    .span(fn_span.union(expr.span))
-                    .children(vec![expr])
+                    .span(fn_span)
+                    .children(params)
                     .build()
             });
 
@@ -278,7 +318,7 @@ where
     })
 }
 
-pub fn parser<'src, I>() -> impl Parser<'src, I, Node> + Clone
+pub fn insts_parser<'src, I>() -> impl Parser<'src, I, Node> + Clone
 where
     I: ValueInput<'src, Token = Token<'src>, Span = Span>,
 {
@@ -306,6 +346,100 @@ where
     let inst = r#let.or(expr);
 
     inst.repeated().collect::<Vec<_>>().map(|nodes| {
+        let start_span = match nodes.first() {
+            Some(first_inst) => first_inst.span,
+            None => SimpleSpan {
+                start: 0,
+                end: 0,
+                context: (),
+            },
+        };
+
+        let end_span = match nodes.last() {
+            Some(last_inst) => last_inst.span,
+            None => SimpleSpan {
+                start: 0,
+                end: 0,
+                context: (),
+            },
+        };
+
+        NodeBuilder::new()
+            .kind(NodeKind::Insts)
+            .span(start_span.union(end_span))
+            .children(nodes)
+            .build()
+    })
+}
+
+pub fn parser<'src, I>() -> impl Parser<'src, I, Node> + Clone
+where
+    I: ValueInput<'src, Token = Token<'src>, Span = Span>,
+{
+    let insts = insts_parser();
+
+    let params = select! {Token::Var(s) => s}
+        .map_with(|expr, e| (expr, e.span()))
+        .then_ignore(just(Token::Ctrl(":")))
+        .then(
+            select! {Token::Type(t) => NodeKind::Type(t)}
+                .map_with(|t, e| NodeBuilder::new().kind(t).span(e.span()).build()),
+        )
+        .map(|((var_name, var_span), var_type): ((_,SimpleSpan),_)| {
+            NodeBuilder::new()
+                .kind(NodeKind::Param(var_name.to_string()))
+                .span(var_span.union(var_type.span))
+                .children(vec![var_type])
+                .build()
+        })
+        .separated_by(just(Token::Ctrl(",")))
+        .collect::<Vec<_>>()
+        .delimited_by(just(Token::Ctrl("(")), just(Token::Ctrl(")")))
+        .map(|args| {
+            let span = match (args.first(), args.last()) {
+                (Some(start), Some(end)) => start.span.union(end.span),
+                _ => SimpleSpan {
+                    start: 0,
+                    end: 0,
+                    context: (),
+                },
+            };
+
+            let mut builder = NodeBuilder::new().kind(NodeKind::Params).span(span);
+
+            if !args.is_empty() {
+                builder = builder.children(args);
+            }
+
+            builder.build()
+        });
+
+    let fn_return = just(Token::Op("->"))
+        .ignore_then(select! {Token::Type(t) => NodeKind::Type(t)})
+        .map_with(|t, e| NodeBuilder::new().kind(t).span(e.span()).build());
+
+    let fn_body = insts
+        .delimited_by(just(Token::Ctrl("{")), just(Token::Ctrl("}")));
+
+    let fns = just(Token::Fn)
+        .ignore_then(
+            select! {Token::Var(s) => s}
+        )
+        .then(params)
+        .then(fn_return.or_not())
+        .then(fn_body)
+        .map_with(|(((fn_name, args), fn_return), fn_body), e| {
+            NodeBuilder::new()
+                .kind(NodeKind::Fn(fn_name.to_string()))
+                .span(e.span())
+                .children(match fn_return {
+                    Some(fn_return_node) => vec![args, fn_return_node, fn_body],
+                    None => vec![args, fn_body],
+                })
+                .build()
+        });
+
+    fns.repeated().collect::<Vec<_>>().map_with(|nodes, _| {
         let start_span = match nodes.first() {
             Some(first_inst) => first_inst.span,
             None => SimpleSpan {
