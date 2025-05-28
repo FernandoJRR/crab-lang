@@ -44,3 +44,38 @@ impl SymTable {
         }
     }
 }
+
+pub struct ScopedSymTable {
+    pub current_scope: Rc<SymTable>,
+    parent_stack: Vec<Rc<SymTable>>
+}
+
+impl ScopedSymTable {
+    pub fn new() -> Self {
+        Self { current_scope: SymTable::new(), parent_stack: vec![] }
+    }
+
+    pub fn push_scope(&mut self) {
+        let new_scope = SymTable::new_child(Rc::clone(&self.current_scope));
+        self.parent_stack.push(Rc::clone(&self.current_scope));
+        self.current_scope = new_scope;
+    }
+
+    pub fn pop_scope(&mut self) {
+        let parent_weak = self.current_scope.parent.borrow().clone();
+        if let Some(parent_rc) = parent_weak.upgrade() {
+            self.current_scope = parent_rc;
+            self.parent_stack.pop();
+        } else {
+            panic!("Parent scope was dropped");
+        }
+    }
+
+    pub fn set(&mut self, name: String, val: Value) {
+        self.current_scope.set(name, val);
+    }
+
+    pub fn get(&self, name: &str) -> Option<Value> {
+        self.current_scope.get(name)
+    }
+}

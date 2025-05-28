@@ -7,7 +7,7 @@ use super::builtins::{Callable, Param, PrintFunc, UserFunc};
 use super::ops::*;
 use super::visitor::Visitor;
 use crate::core::analyzer::{Node, NodeKind, Type};
-use crate::core::facade::sym_table::SymTable;
+use crate::core::facade::sym_table::{ScopedSymTable};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
@@ -40,11 +40,8 @@ impl std::fmt::Display for Value {
 pub type ResultValue = Result<Option<Value>, String>;
 
 pub struct Interpreter {
-    pub current_scope: Rc<SymTable>,
     func_table: HashMap<String, Rc<dyn Callable>>,
-
-    #[allow(dead_code)]
-    sym_table: Rc<SymTable>,
+    sym_table: ScopedSymTable,
 }
 
 impl Interpreter {
@@ -52,10 +49,8 @@ impl Interpreter {
         let mut fns: HashMap<String, Rc<dyn Callable>> = HashMap::new();
         fns.insert("print".to_string(), Rc::new(PrintFunc));
 
-        let table = SymTable::new();
         Self {
-            current_scope: Rc::clone(&table),
-            sym_table: table,
+            sym_table: ScopedSymTable::new(),
             func_table: fns,
         }
     }
@@ -71,25 +66,15 @@ impl Interpreter {
     }
 
     pub fn push_scope(&mut self) {
-        let new_scope = SymTable::new_child(Rc::clone(&self.current_scope));
-        self.current_scope = new_scope;
+        self.sym_table.push_scope();
     }
 
     pub fn pop_scope(&mut self) {
-        let parent_weak = self.current_scope.parent.borrow().clone();
-        if let Some(parent_rc) = parent_weak.upgrade() {
-            self.current_scope = parent_rc;
-        } else {
-            panic!("Parent scope was dropped");
-        }
+        self.sym_table.pop_scope();
     }
 
     pub fn set_var(&mut self, name: String, val: Value) {
-        self.current_scope.set(name, val);
-    }
-
-    pub fn get_var(&self, name: &str) -> Option<Value> {
-        self.current_scope.get(name)
+        self.sym_table.set(name, val);
     }
 
     pub fn define_fn(&mut self, name: String, params: Vec<Value>, body: Node) {
@@ -153,7 +138,7 @@ impl<'src> Visitor<'src> for Interpreter {
     }
 
     fn visit_value(&mut self, _node: &Node, name: &'src str) -> ResultValue {
-        match self.get_var(name) {
+        match self.sym_table.get(name) {
             Some(value) => Ok(Some(value.clone())),
             None => panic!("Variable not initialized"),
         }
@@ -283,7 +268,7 @@ impl<'src> Visitor<'src> for Interpreter {
 
         let value_result = value.visit(self).unwrap();
 
-        self.set_var(var_name.to_string(), value_result.unwrap());
+        self.sym_table.set(var_name.to_string(), value_result.unwrap());
 
         Ok(None)
     }
@@ -371,7 +356,7 @@ impl<'src> Visitor<'src> for PrettyPrinter {
         Ok(Some(Value::Null))
     }
 
-    fn visit_type(&mut self, node: &Node, r#type: Type) -> ResultValue {
+    fn visit_type(&mut self, _node: &Node, r#type: Type) -> ResultValue {
         println!("{}Type({})", self.indent_str(), r#type);
         Ok(Some(Value::Null))
     }

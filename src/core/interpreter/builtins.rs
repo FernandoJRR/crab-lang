@@ -1,10 +1,64 @@
 use crate::core::analyzer::{Node, Type};
 
-use super::{engine::{ResultValue, Value, Interpreter}};
+use super::engine::{Interpreter, ResultValue, Value};
+
+pub struct CallContext<'a> {
+    interpreter: &'a mut Interpreter,
+    args: Vec<Value>,
+    params: &'a Vec<Param>,
+}
+
+impl<'a> CallContext<'a> {
+    pub fn new(interpreter: &'a mut Interpreter, args: Vec<Value>, params: &'a Vec<Param>) -> Self {
+        Self {
+            interpreter,
+            args,
+            params,
+        }
+    }
+
+    pub fn enter(&mut self) -> Result<(), String> {
+        if self.args.len() != self.params.len() {
+            return Err(format!(
+                "Expected {} args, got {}",
+                self.params.len(),
+                self.args.len()
+            ));
+        }
+
+        for (param, arg) in self.params.iter().zip(self.args.iter()) {
+            let type_match = matches!(
+                (arg, &param.var_type),
+                (Value::Int(_), Type::Int)
+                    | (Value::Float(_), Type::Float)
+                    | (Value::Bool(_), Type::Bool)
+            );
+
+            if !type_match {
+                return Err(format!(
+                    "Type mismatch for '{}': expected {:?}, got {:?}",
+                    param.name, param.var_type, arg
+                ));
+            }
+        }
+
+        self.interpreter.push_scope();
+
+        for (param, arg) in self.params.iter().zip(self.args.iter()) {
+            self.interpreter.set_var(param.name.clone(), arg.clone());
+        }
+
+        Ok(())
+    }
+
+    pub fn exit(&mut self) {
+        self.interpreter.pop_scope();
+    }
+}
 
 pub struct Param {
     pub name: String,
-    pub var_type: Type
+    pub var_type: Type,
 }
 
 pub trait Callable {
@@ -14,11 +68,18 @@ pub trait Callable {
 pub struct PrintFunc;
 
 impl Callable for PrintFunc {
-    fn call(&self, _interpreter: &mut Interpreter, args: &[Value]) -> ResultValue {
+    fn call(&self, interpreter: &mut Interpreter, args: &[Value]) -> ResultValue {
+        let dummy_params = vec![];
+        let mut context = CallContext::new(interpreter, args.to_vec(), &dummy_params);
+
+        context.enter()?;
+
         let v = args
             .first()
             .ok_or_else(|| "print: missing argument".to_string())?;
         println!("{}", v);
+
+        context.exit();
         Ok(None)
     }
 }
@@ -30,45 +91,12 @@ pub struct UserFunc {
 
 impl Callable for UserFunc {
     fn call(&self, interpreter: &mut Interpreter, args: &[Value]) -> ResultValue {
-        if args.len() != self.params.len() {
-            return Err(format!(
-                "Expected {} args, got {}",
-                self.params.len(),
-                args.len()
-            ));
-        }
+        let mut context = CallContext::new(interpreter, args.to_vec(), &self.params);
+        context.enter()?;
 
-        for (param, arg) in self.params.iter().zip(args.iter()) {
-            let type_match = match (arg, &param.var_type) {
-                (Value::Int(_), Type::Int) => true,
-                (Value::Float(_), Type::Float) => true,
-                (Value::Bool(_), Type::Bool) => true,
+        let result = self.body.visit(context.interpreter);
 
-                (v, expected) => {
-                    return Err(format!(
-                        "Type mismatch for '{}': expected {:?}, got {:?}",
-                        param.name, expected, v
-                    ));
-                }
-            };
-
-            if !type_match {
-                return Err(format!(
-                    "Type mismatch for '{}': expected {:?}, got {:?}",
-                    param.name, param.var_type, arg
-                ));
-            }
-        }
-
-        interpreter.push_scope();
-
-        for (param, arg) in self.params.iter().zip(args.iter()) {
-            interpreter.set_var(param.name.clone(), arg.clone());
-        }
-
-        let result = self.body.visit(interpreter);
-
-        interpreter.pop_scope();
+        context.exit();
 
         result
     }
