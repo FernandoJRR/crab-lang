@@ -1,4 +1,7 @@
-use crate::core::analyzer::{Node, Type};
+use crate::core::{
+    analyzer::{Node, Type},
+    interpreter::interpolator::{Interpolator, StringInterpolator},
+};
 
 use super::engine::{Interpreter, ResultValue, Value};
 
@@ -68,13 +71,21 @@ pub trait Callable {
 pub struct PrintFunc;
 
 impl Callable for PrintFunc {
-    fn call(&self, _interpreter: &mut Interpreter, args: &[Value]) -> ResultValue {
+    fn call(&self, interpreter: &mut Interpreter, args: &[Value]) -> ResultValue {
         if args.len() != 1 {
             return Err(format!("print: expected 1 argument, got {}", args.len()));
         }
 
-        let v = &args[0];
-        println!("{}", v);
+        match &args[0] {
+            Value::String(template) => {
+                let mut interpolator = StringInterpolator { interpreter };
+                let output = interpolator.interpolate(template);
+                println!("{}", output);
+            }
+            other => {
+                println!("{}", other);
+            }
+        }
 
         Ok(None)
     }

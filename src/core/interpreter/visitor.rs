@@ -8,6 +8,7 @@ pub trait Visitor<'src> {
     fn visit_float(&mut self, node: &Node, value: f64) -> ResultValue;
     fn visit_bool(&mut self, node: &Node, value: bool) -> ResultValue;
     fn visit_value(&mut self, node: &Node, name: &'src str) -> ResultValue;
+    fn visit_string(&mut self, node: &Node, string: &'src str) -> ResultValue;
     fn visit_type(&mut self, node: &Node, r#type: Type) -> ResultValue;
 
     fn visit_neg(&mut self, node: &Node) -> ResultValue;
@@ -28,6 +29,8 @@ pub trait Visitor<'src> {
     fn visit_and(&mut self, node: &Node) -> ResultValue;
 
     fn visit_decl(&mut self, node: &Node) -> ResultValue;
+    fn visit_assign(&mut self, node: &Node) -> ResultValue;
+
     fn visit_insts(&mut self, node: &Node) -> ResultValue;
 
     fn visit_fn(&mut self, node: &Node, name: &'src str) -> ResultValue;
@@ -44,6 +47,7 @@ impl<'src> Node {
             NodeKind::Float(f) => visitor.visit_float(self, *f),
             NodeKind::Bool(b) => visitor.visit_bool(self, *b),
             NodeKind::Value(name) => visitor.visit_value(self, name),
+            NodeKind::String(s) => visitor.visit_string(self, s),
             NodeKind::Type(t) => visitor.visit_type(self, t.clone()),
 
             NodeKind::Neg => visitor.visit_neg(self),
@@ -64,6 +68,7 @@ impl<'src> Node {
             NodeKind::And => visitor.visit_and(self),
 
             NodeKind::Decl => visitor.visit_decl(self),
+            NodeKind::Assign => visitor.visit_assign(self),
 
             NodeKind::Fn(name) => visitor.visit_fn(self, name),
             NodeKind::Params => visitor.visit_params(self),

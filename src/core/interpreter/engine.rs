@@ -7,7 +7,7 @@ use super::builtins::{Callable, Param, PrintFunc, UserFunc};
 use super::ops::*;
 use super::visitor::Visitor;
 use crate::core::analyzer::{Node, NodeKind, Type};
-use crate::core::facade::sym_table::{ScopedSymTable};
+use crate::core::facade::sym_table::ScopedSymTable;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
@@ -16,6 +16,7 @@ pub enum Value {
     Float(f64),
     Bool(bool),
     Type(Type),
+    String(String),
     Params(Vec<Self>),
     Param(String, Type),
 }
@@ -27,11 +28,13 @@ impl std::fmt::Display for Value {
             Value::Int(n) => write!(f, "{}", n),
             Value::Float(fl) => write!(f, "{}", fl),
             Value::Bool(b) => write!(f, "{}", b),
+            Value::String(s) => write!(f, "{}", s),
             Value::Type(t) => write!(f, "{}", t),
             Value::Params(params) => {
-                let formatted_params: Vec<String> = params.iter().map(|p| format!("{}", p)).collect();
+                let formatted_params: Vec<String> =
+                    params.iter().map(|p| format!("{}", p)).collect();
                 write!(f, "[{}]", formatted_params.join(", "))
-            },
+            }
             Value::Param(name, ty) => write!(f, "{}: {}", name, ty),
         }
     }
@@ -75,6 +78,10 @@ impl Interpreter {
 
     pub fn set_var(&mut self, name: String, val: Value) {
         self.sym_table.set(name, val);
+    }
+
+    pub fn get_var(&mut self, name: &str) -> Option<Value> {
+        self.sym_table.get(name)
     }
 
     pub fn define_fn(&mut self, name: String, params: Vec<Value>, body: Node) {
@@ -131,6 +138,10 @@ impl<'src> Visitor<'src> for Interpreter {
 
     fn visit_bool(&mut self, _node: &Node, value: bool) -> ResultValue {
         Ok(Some(Value::Bool(value)))
+    }
+
+    fn visit_string(&mut self, _node: &Node, string: &'src str) -> ResultValue {
+        Ok(Some(Value::String(string.to_string())))
     }
 
     fn visit_type(&mut self, _node: &Node, var_type: Type) -> ResultValue {
@@ -268,9 +279,46 @@ impl<'src> Visitor<'src> for Interpreter {
 
         let value_result = value.visit(self).unwrap();
 
-        self.sym_table.set(var_name.to_string(), value_result.unwrap());
+        self.sym_table
+            .set(var_name.to_string(), value_result.unwrap());
 
         Ok(None)
+    }
+
+    fn visit_assign(&mut self, node: &Node) -> ResultValue {
+        let [ref name, ref value] = node.children.as_ref().unwrap()[..] else {
+            panic!("Declaration requires 2 children");
+        };
+
+        let var_name = match &name.kind {
+            NodeKind::Value(n) => n,
+            _ => panic!("Invalid name for declaration"),
+        };
+
+        let value_result = value.visit(self).unwrap();
+
+        let existing_var = self.sym_table.get(var_name);
+
+        match existing_var {
+            Some(value) => {
+                let type_match = matches!(
+                    (value, &value_result.clone().unwrap()),
+                    (Value::Int(_), Value::Int(_))
+                        | (Value::Float(_), Value::Float(_))
+                        | (Value::Bool(_), Value::Bool(_))
+                        | (Value::String(_), Value::String(_))
+                );
+
+                if type_match {
+                    self.sym_table
+                        .set(var_name.to_string(), value_result.unwrap());
+                    Ok(None)
+                } else {
+                    Err("mismatched types".to_string())
+                }
+            }
+            None => Err("Cannot find the variable in the scope".to_string()),
+        }
     }
 
     fn visit_insts(&mut self, node: &Node) -> ResultValue {
@@ -348,6 +396,11 @@ impl<'src> Visitor<'src> for PrettyPrinter {
 
     fn visit_bool(&mut self, _node: &Node, b: bool) -> ResultValue {
         println!("{}Bool({})", self.indent_str(), b);
+        Ok(Some(Value::Null))
+    }
+
+    fn visit_string(&mut self, _node: &Node, string: &'src str) -> ResultValue {
+        println!("{}String({})", self.indent_str(), string);
         Ok(Some(Value::Null))
     }
 
@@ -446,6 +499,12 @@ impl<'src> Visitor<'src> for PrettyPrinter {
 
     fn visit_decl(&mut self, node: &Node) -> ResultValue {
         println!("{}Decl", self.indent_str());
+        let _ = self.with_indent(|v| node.visit_children(v));
+        Ok(None)
+    }
+
+    fn visit_assign(&mut self, node: &Node) -> ResultValue {
+        println!("{}Assign", self.indent_str());
         let _ = self.with_indent(|v| node.visit_children(v));
         Ok(None)
     }
