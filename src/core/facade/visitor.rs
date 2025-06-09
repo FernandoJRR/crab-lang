@@ -1,6 +1,6 @@
 use crate::core::analyzer::{Node, NodeKind, Type};
 
-use super::engine::ResultValue;
+use super::super::interpreter::engine::ResultValue;
 
 pub trait Visitor<'src> {
     fn visit_null(&mut self, node: &Node) -> ResultValue;

@@ -43,6 +43,7 @@ pub enum Type {
     Int,
     Float,
     Bool,
+    String
 }
 
 impl std::fmt::Display for Type {
@@ -51,6 +52,7 @@ impl std::fmt::Display for Type {
             Self::Int => "int",
             Self::Float => "float",
             Self::Bool => "bool",
+            Self::String => "string",
         };
         write!(f, "{}", printable)
     }

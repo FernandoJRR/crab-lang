@@ -1,7 +1,6 @@
-use crate::core::analyzer::{InterpolationPart, interpolation_parser};
+use crate::core::{analyzer::{interpolation_parser, InterpolationPart}, interpreter::Interpreter};
 use chumsky::Parser;
 
-use super::engine::{Interpreter};
 
 pub trait Interpolator {
     fn resolve_variable(&mut self, name: &str) -> String;

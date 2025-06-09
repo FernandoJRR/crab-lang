@@ -1,9 +1,13 @@
+use std::fmt;
+
 use crate::core::{
     analyzer::{Node, Type},
-    interpreter::interpolator::{Interpolator, StringInterpolator},
+    facade::interpolator::{Interpolator, StringInterpolator},
+    interpreter::{
+        Interpreter,
+        engine::{ResultValue, Value},
+    },
 };
-
-use super::engine::{Interpreter, ResultValue, Value};
 
 pub struct CallContext<'a> {
     interpreter: &'a mut Interpreter,
@@ -66,6 +70,13 @@ pub struct Param {
 
 pub trait Callable {
     fn call(&self, interpreter: &mut Interpreter, args: &[Value]) -> ResultValue;
+    fn check(&self, args: &[Value]) -> Result<(), String>;
+}
+
+impl fmt::Debug for dyn Callable {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Callable {{ ... }}")
+    }
 }
 
 pub struct PrintFunc;
@@ -89,6 +100,14 @@ impl Callable for PrintFunc {
 
         Ok(None)
     }
+
+    fn check(&self, args: &[Value]) -> Result<(), String> {
+        if args.len() != 1 {
+            Err(format!("print: expected 1 argument, got {}", args.len()))
+        } else {
+            Ok(())
+        }
+    }
 }
 
 pub struct UserFunc {
@@ -106,5 +125,33 @@ impl Callable for UserFunc {
         context.exit();
 
         result
+    }
+    fn check(&self, args: &[Value]) -> Result<(), String> {
+        if args.len() != self.params.len() {
+            return Err(format!(
+                "Expected {} args, got {}",
+                self.params.len(),
+                args.len()
+            ));
+        }
+
+        for (param, arg) in self.params.iter().zip(args.iter()) {
+            let type_match = matches!(
+                (arg, &param.var_type),
+                (Value::Int(_), Type::Int)
+                    | (Value::Float(_), Type::Float)
+                    | (Value::Bool(_), Type::Bool)
+                    | (Value::String(_), Type::String)
+            );
+
+            if !type_match {
+                return Err(format!(
+                    "Type mismatch for '{}': expected {:?}, got {:?}",
+                    param.name, param.var_type, arg
+                ));
+            }
+        }
+
+        Ok(())
     }
 }

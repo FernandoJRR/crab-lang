@@ -1,3 +1,3 @@
-pub fn generate_code() {
-    
-}
+pub mod ir;
+pub mod optimizer;
+pub mod assembly;

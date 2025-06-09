@@ -3,10 +3,10 @@ use std::rc::Rc;
 
 use chumsky::error::EmptyErr;
 
-use super::builtins::{Callable, Param, PrintFunc, UserFunc};
-use super::ops::*;
-use super::visitor::Visitor;
+use super::super::facade::visitor::Visitor;
 use crate::core::analyzer::{Node, NodeKind, Type};
+use crate::core::facade::builtins::{Callable, Param, PrintFunc, UserFunc};
+use crate::core::facade::ops::*;
 use crate::core::facade::sym_table::ScopedSymTable;
 
 #[derive(Debug, Clone, PartialEq)]

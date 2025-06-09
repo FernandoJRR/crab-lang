@@ -1,9 +1,15 @@
-use crate::core::{analyzer, interpreter::{Interpreter, PrettyPrinter}};
+use crate::core::{analyzer, facade::compiler::CompilerFacade, interpreter::{Interpreter, PrettyPrinter}};
 pub fn run() {
     let args: Vec<String> = std::env::args().collect();
 
     if args.len() > 1 {
         match args[1].as_str() {
+            "compile" => {
+                let file_path = args.get(2).unwrap();
+                let src = std::fs::read_to_string(file_path).unwrap();
+                let mut compiler_facade = CompilerFacade::new();
+                compiler_facade.compile(&src);
+            }
             "run" => {
                 let file_path = args.get(2).unwrap();
                 let src = std::fs::read_to_string(file_path).unwrap();
