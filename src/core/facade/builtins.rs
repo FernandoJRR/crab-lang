@@ -2,6 +2,7 @@ use std::fmt;
 
 use crate::core::{
     analyzer::{Node, Type},
+    codegen::ir::{TACBuilder, TACInstruction},
     facade::interpolator::{Interpolator, StringInterpolator},
     interpreter::{
         Interpreter,
@@ -71,6 +72,7 @@ pub struct Param {
 pub trait Callable {
     fn call(&self, interpreter: &mut Interpreter, args: &[Value]) -> ResultValue;
     fn check(&self, args: &[Value]) -> Result<(), String>;
+    fn to_tac(&self, builder: &mut TACBuilder, res_temp: &str, args: &[Value]) -> Result<(), String>;
 }
 
 impl fmt::Debug for dyn Callable {
@@ -107,6 +109,17 @@ impl Callable for PrintFunc {
         } else {
             Ok(())
         }
+    }
+
+    fn to_tac(&self, builder: &mut TACBuilder, res_temp: &str, args: &[Value]) -> Result<(), String> {
+        self.check(args)?;
+        let arg0 = match &args[0] {
+            Value::String(s) => s.clone(),
+            _ => return Err("print: invalid arg for TAC".into()),
+        };
+        builder.emit(TACInstruction::Param(arg0.clone()));
+        builder.emit(TACInstruction::Call("print".to_string(), 1));
+        Ok(()) 
     }
 }
 
@@ -151,6 +164,33 @@ impl Callable for UserFunc {
                 ));
             }
         }
+
+        Ok(())
+    }
+
+    fn to_tac(
+        &self,
+        builder: &mut TACBuilder,
+        result_temp: &str,
+        args: &[Value],
+    ) -> Result<(), String> {
+        for arg in args {
+            let arg_repr = match arg {
+                Value::Int(n) => n.to_string(),
+                Value::Float(f) => f.to_string(),
+                Value::Bool(b) => b.to_string(),
+                Value::String(s) => format!("\"{}\"", s),
+                Value::Null => "null".into(),
+                Value::Param(_, _) | Value::Params(_) | Value::Type(_) => {
+                    return Err("Argumento inválido para llamada".into());
+                }
+            };
+            builder.emit(TACInstruction::Param(arg_repr));
+        }
+
+        // Emitimos la instrucción de llamada
+        let arity = args.len();
+        builder.emit(TACInstruction::Call(result_temp.to_string(), arity));
 
         Ok(())
     }
