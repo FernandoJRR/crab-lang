@@ -1,5 +1,8 @@
 use chumsky::{input::ValueInput, prelude::*};
 
+#[cfg(test)]
+mod tests;
+
 type Span = SimpleSpan;
 type Spanned<T> = (T, SimpleSpan);
 
