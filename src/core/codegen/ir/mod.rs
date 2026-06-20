@@ -12,6 +12,9 @@ use crate::core::{
     interpreter::engine::{ResultValue, Value},
 };
 
+#[cfg(test)]
+mod tests;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UnaryOperator {
     Neg,
