@@ -31,7 +31,7 @@ impl CompilerFacade {
 
                     let tac_instructions = self.tac_generator.get_instructions();
                     for inst in tac_instructions {
-                        println!("{:?}", inst);
+                        println!("{}", inst);
                     }
                 }
                 Err(error) => panic!("{error}"),

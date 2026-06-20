@@ -1,3 +1,5 @@
+use std::fmt;
+
 use crate::core::{
     analyzer::{Node, NodeKind, Type},
     facade::{
@@ -42,13 +44,67 @@ pub enum TACInstruction {
     IfGoto(String, String),
     Param(String),
     Call(String, usize),
+    CallAssign(String, String, usize), // temp_res, fn_name, arity
     Return(Option<String>),
+}
+
+impl fmt::Display for UnaryOperator {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            UnaryOperator::Neg => write!(f, "-"),
+            UnaryOperator::Not => write!(f, "!"),
+        }
+    }
+}
+
+impl fmt::Display for BinaryOperator {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            BinaryOperator::Add => write!(f, "+"),
+            BinaryOperator::Sub => write!(f, "-"),
+            BinaryOperator::Mult => write!(f, "*"),
+            BinaryOperator::Div => write!(f, "/"),
+            BinaryOperator::Eq => write!(f, "=="),
+            BinaryOperator::Neq => write!(f, "!="),
+            BinaryOperator::Gt => write!(f, ">"),
+            BinaryOperator::Lt => write!(f, "<"),
+            BinaryOperator::Ge => write!(f, ">="),
+            BinaryOperator::Le => write!(f, "<="),
+            BinaryOperator::And => write!(f, "&&"),
+            BinaryOperator::Or => write!(f, "||"),
+        }
+    }
+}
+
+impl fmt::Display for TACInstruction {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            TACInstruction::Assign(dest, src) => write!(f, "{} = {}", dest, src),
+            TACInstruction::BinaryOp(dest, op, left, right) => {
+                write!(f, "{} = {} {} {}", dest, left, op, right)
+            }
+            TACInstruction::UnaryOp(dest, op, operand) => {
+                write!(f, "{} = {}{}", dest, op, operand)
+            }
+            TACInstruction::Label(label) => write!(f, "{}:", label),
+            TACInstruction::Goto(label) => write!(f, "goto {}", label),
+            TACInstruction::IfGoto(cond, label) => write!(f, "if {} goto {}", cond, label),
+            TACInstruction::Param(param) => write!(f, "param {}", param),
+            TACInstruction::Call(name, arity) => write!(f, "call {}, {}", name, arity),
+            TACInstruction::CallAssign(dest, name, arity) => {
+                write!(f, "{} = call {}, {}", dest, name, arity)
+            }
+            TACInstruction::Return(Some(val)) => write!(f, "return {}", val),
+            TACInstruction::Return(None) => write!(f, "return"),
+        }
+    }
 }
 
 // Builder for TAC instructions
 pub struct TACBuilder {
     instructions: Vec<TACInstruction>,
     temp_counter: usize,
+    label_counter: usize,
 }
 
 impl TACBuilder {
@@ -56,6 +112,7 @@ impl TACBuilder {
         Self {
             instructions: Vec::new(),
             temp_counter: 0,
+            label_counter: 0,
         }
     }
 
@@ -63,6 +120,12 @@ impl TACBuilder {
         let temp = format!("t{}", self.temp_counter);
         self.temp_counter += 1;
         temp
+    }
+
+    pub fn new_label(&mut self) -> String {
+        let label = format!("L{}", self.label_counter);
+        self.label_counter += 1;
+        label
     }
 
     pub fn emit(&mut self, tac_instruction: TACInstruction) {
@@ -320,10 +383,17 @@ impl<'src> Visitor<'src> for TACGenerator {
     }
 
     fn visit_params(&mut self, node: &Node) -> ResultValue {
+        if let Some(children) = &node.children {
+            for child in children {
+                child.visit(self)?;
+            }
+        }
         Ok(None)
     }
 
-    fn visit_param(&mut self, node: &Node, name: &'src str) -> ResultValue {
+    fn visit_param(&mut self, _node: &Node, name: &'src str) -> ResultValue {
+        self.builder
+            .emit(TACInstruction::Param(name.to_string()));
         Ok(None)
     }
 
@@ -341,41 +411,39 @@ impl<'src> Visitor<'src> for TACGenerator {
             }
         }
 
-        for arg in arg_temps.iter().rev() {
+        for arg in &arg_temps {
             self.builder.emit(TACInstruction::Param(arg.clone()));
         }
 
         let result_temp = self.builder.new_temp();
 
-        self.builder.emit(TACInstruction::Call(fn_name.to_string(), arg_temps.len()));
-
-        self.builder.emit(TACInstruction::Return(Some(result_temp.clone())));
+        self.builder.emit(TACInstruction::CallAssign(
+            result_temp.clone(),
+            fn_name.to_string(),
+            arg_temps.len(),
+        ));
 
         Ok(Some(Value::String(result_temp)))
     }
 
     fn visit_fn(&mut self, node: &Node, fn_name: &'src str) -> ResultValue {
-        // Label for entering function
         self.builder
             .emit(TACInstruction::Label(fn_name.to_string()));
 
-        // Process parameters
-        if let Some(children) = &node.children {
-            if let Some(params_node) = children
-                .iter()
-                .find(|child| matches!(child.kind, NodeKind::Params))
-            {
+        let children = node.children.as_ref().unwrap();
+        match children.as_slice() {
+            [params_node, body] => {
                 params_node.visit(self)?;
+                body.visit(self)?;
             }
-
-            // Process function body
-            if let Some(body_node) = children
-                .iter()
-                .find(|child| matches!(child.kind, NodeKind::Insts))
-            {
-                body_node.visit(self)?;
+            [params_node, _return_type, body] => {
+                params_node.visit(self)?;
+                body.visit(self)?;
             }
+            _ => return Err(format!("Function '{}' expected 2 or 3 children, got {}", fn_name, children.len())),
         }
+
+        self.builder.emit(TACInstruction::Return(None));
 
         Ok(None)
     }
