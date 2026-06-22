@@ -1,7 +1,7 @@
 use crate::core::{
     analyzer::{self},
     codegen::{
-        assembly::{x86::X86Backend, CodegenContext},
+        backend::{CodegenBackend, CodegenContext},
         ir::TACGenerator,
         optimizer::{
             constant_folding::ConstantFoldingPass,
@@ -22,7 +22,7 @@ pub struct CompilerFacade {
 }
 
 impl CompilerFacade {
-    pub fn new() -> Self {
+    pub fn new(backend: Box<dyn CodegenBackend>) -> Self {
         let mut optimizer = OptimizerPipeline::new();
         optimizer.add_pass(Box::new(ConstantPropagationPass));
         optimizer.add_pass(Box::new(ConstantFoldingPass));
@@ -32,7 +32,7 @@ impl CompilerFacade {
             sem_analyser: SemanticAnalyzer::new(),
             tac_generator: TACGenerator::new(),
             optimizer,
-            codegen: CodegenContext::new(Box::new(X86Backend)),
+            codegen: CodegenContext::new(backend),
         }
     }
 

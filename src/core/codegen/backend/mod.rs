@@ -1,4 +1,5 @@
 pub mod x86;
+pub mod llvm;
 
 #[cfg(test)]
 mod tests;

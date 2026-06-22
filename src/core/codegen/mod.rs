@@ -1,3 +1,3 @@
 pub mod ir;
 pub mod optimizer;
-pub mod assembly;
+pub mod backend;

@@ -1,5 +1,6 @@
 use super::*;
 use super::x86::X86Backend;
+use super::llvm::LlvmBackend;
 use crate::core::codegen::ir::{BinaryOperator, TACInstruction, UnaryOperator};
 
 fn x86(instructions: &[TACInstruction]) -> String {
@@ -238,4 +239,163 @@ fn full_function() {
         "mov [x], rax",
         "ret",
     ]);
+}
+
+// =====================
+// LLVM Backend tests
+// =====================
+
+fn llvm_gen(instructions: &[TACInstruction]) -> String {
+    let backend = LlvmBackend;
+    backend.generate(instructions)
+}
+
+#[test]
+fn llvm_context_delegates() {
+    let ctx = CodegenContext::new(Box::new(LlvmBackend));
+    let input = vec![
+        TACInstruction::Label("main".into()),
+        TACInstruction::Return(None),
+    ];
+    let output = ctx.generate(&input);
+    assert!(output.contains("define"));
+    assert!(output.contains("ret"));
+}
+
+#[test]
+fn llvm_simple_function() {
+    let output = llvm_gen(&[
+        TACInstruction::Label("main".into()),
+        TACInstruction::Return(None),
+    ]);
+    assert!(output.contains("define i64 @main()"));
+    assert!(output.contains("ret void"));
+}
+
+#[test]
+fn llvm_assign_constant() {
+    let output = llvm_gen(&[
+        TACInstruction::Label("main".into()),
+        TACInstruction::Assign("t0".into(), "42".into()),
+        TACInstruction::Return(Some("t0".into())),
+    ]);
+    assert!(output.contains("store i64 42"));
+    assert!(output.contains("alloca i64"));
+    assert!(output.contains("ret i64"));
+}
+
+#[test]
+fn llvm_addition() {
+    let output = llvm_gen(&[
+        TACInstruction::Label("main".into()),
+        TACInstruction::Assign("t0".into(), "3".into()),
+        TACInstruction::Assign("t1".into(), "4".into()),
+        TACInstruction::BinaryOp("t2".into(), BinaryOperator::Add, "t0".into(), "t1".into()),
+        TACInstruction::Return(Some("t2".into())),
+    ]);
+    assert!(output.contains("add i64"));
+    assert!(output.contains("ret i64"));
+}
+
+#[test]
+fn llvm_subtraction() {
+    let output = llvm_gen(&[
+        TACInstruction::Label("main".into()),
+        TACInstruction::Assign("t0".into(), "10".into()),
+        TACInstruction::Assign("t1".into(), "3".into()),
+        TACInstruction::BinaryOp("t2".into(), BinaryOperator::Sub, "t0".into(), "t1".into()),
+        TACInstruction::Return(Some("t2".into())),
+    ]);
+    assert!(output.contains("sub i64"));
+}
+
+#[test]
+fn llvm_multiplication() {
+    let output = llvm_gen(&[
+        TACInstruction::Label("main".into()),
+        TACInstruction::Assign("t0".into(), "6".into()),
+        TACInstruction::Assign("t1".into(), "7".into()),
+        TACInstruction::BinaryOp("t2".into(), BinaryOperator::Mult, "t0".into(), "t1".into()),
+        TACInstruction::Return(Some("t2".into())),
+    ]);
+    assert!(output.contains("mul i64"));
+}
+
+#[test]
+fn llvm_division() {
+    let output = llvm_gen(&[
+        TACInstruction::Label("main".into()),
+        TACInstruction::Assign("t0".into(), "10".into()),
+        TACInstruction::Assign("t1".into(), "2".into()),
+        TACInstruction::BinaryOp("t2".into(), BinaryOperator::Div, "t0".into(), "t1".into()),
+        TACInstruction::Return(Some("t2".into())),
+    ]);
+    assert!(output.contains("sdiv i64"));
+}
+
+#[test]
+fn llvm_comparison() {
+    let output = llvm_gen(&[
+        TACInstruction::Label("main".into()),
+        TACInstruction::Assign("t0".into(), "5".into()),
+        TACInstruction::Assign("t1".into(), "3".into()),
+        TACInstruction::BinaryOp("t2".into(), BinaryOperator::Gt, "t0".into(), "t1".into()),
+        TACInstruction::Return(Some("t2".into())),
+    ]);
+    assert!(output.contains("icmp sgt i64"));
+    assert!(output.contains("zext i1"));
+}
+
+#[test]
+fn llvm_negation() {
+    let output = llvm_gen(&[
+        TACInstruction::Label("main".into()),
+        TACInstruction::Assign("t0".into(), "5".into()),
+        TACInstruction::UnaryOp("t1".into(), UnaryOperator::Neg, "t0".into()),
+        TACInstruction::Return(Some("t1".into())),
+    ]);
+    assert!(output.contains("sub i64 0"));
+}
+
+#[test]
+fn llvm_logical_not() {
+    let output = llvm_gen(&[
+        TACInstruction::Label("main".into()),
+        TACInstruction::Assign("t0".into(), "true".into()),
+        TACInstruction::UnaryOp("t1".into(), UnaryOperator::Not, "t0".into()),
+        TACInstruction::Return(Some("t1".into())),
+    ]);
+    assert!(output.contains("xor i64"));
+}
+
+#[test]
+fn llvm_function_call() {
+    let output = llvm_gen(&[
+        TACInstruction::Label("foo".into()),
+        TACInstruction::Return(Some("42".into())),
+        TACInstruction::Label("main".into()),
+        TACInstruction::CallAssign("t0".into(), "foo".into(), 0),
+        TACInstruction::Return(Some("t0".into())),
+    ]);
+    assert!(output.contains("define i64 @foo()"));
+    assert!(output.contains("define i64 @main()"));
+    assert!(output.contains("call i64 @foo()"));
+}
+
+#[test]
+fn llvm_multiple_functions() {
+    let output = llvm_gen(&[
+        TACInstruction::Label("add".into()),
+        TACInstruction::Return(None),
+        TACInstruction::Label("main".into()),
+        TACInstruction::Return(None),
+    ]);
+    assert!(output.contains("define i64 @add()"));
+    assert!(output.contains("define i64 @main()"));
+}
+
+#[test]
+fn llvm_backend_name() {
+    let backend = LlvmBackend;
+    assert_eq!(backend.name(), "llvm");
 }

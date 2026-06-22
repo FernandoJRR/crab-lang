@@ -35,22 +35,6 @@ impl SemanticAnalyzer {
         (&self.sym_table, &self.func_table)
     }
 
-    pub fn push_scope(&mut self) {
-        self.sym_table.push_scope();
-    }
-
-    pub fn pop_scope(&mut self) {
-        self.sym_table.pop_scope();
-    }
-
-    pub fn set_var(&mut self, name: String, val: Type) {
-        self.sym_table.set(name, val);
-    }
-
-    pub fn get_var(&mut self, name: &str) -> Option<Type> {
-        self.sym_table.get(name)
-    }
-
     fn unary_op_check(&mut self, value: Value, op_strategy: Box<dyn UnaryOp>) -> ResultValue {
         UnaryContext::new(op_strategy).type_check(value)
     }
@@ -91,7 +75,7 @@ impl<'src> Visitor<'src> for SemanticAnalyzer {
     }
 
     fn visit_value(&mut self, _node: &Node, name: &'src str) -> ResultValue {
-        match self.get_var(name) {
+        match self.sym_table.get(name) {
             Some(var_type) => Ok(Some(Value::Type(var_type))),
             None => {
                 self.errors
@@ -121,7 +105,7 @@ impl<'src> Visitor<'src> for SemanticAnalyzer {
             _ => return Err("Unsupported value type in declaration".to_string()),
         };
 
-        self.set_var(var_name.to_string(), value_type);
+        self.sym_table.set(var_name.to_string(), value_type);
         Ok(None)
     }
 
@@ -135,7 +119,7 @@ impl<'src> Visitor<'src> for SemanticAnalyzer {
             _ => return Err("Invalid name for assignment".to_string()),
         };
 
-        let existing_type = self.get_var(var_name);
+        let existing_type = self.sym_table.get(var_name);
         if existing_type.clone().is_none() {
             self.errors
                 .push(format!("Variable '{}' not declared", var_name));
@@ -193,9 +177,9 @@ impl<'src> Visitor<'src> for SemanticAnalyzer {
         let [ref l, ref r] = node.children.as_ref().unwrap()[..] else {
             return Err("Addition expects 2 children".to_string());
         };
-        let lv = l.visit(self)?;
-        let rv = r.visit(self)?;
-        self.binary_op_check(lv.unwrap(), rv.unwrap(), Box::new(AddOp))
+        let lv = l.visit(self)?.ok_or("Missing left value in add")?;
+        let rv = r.visit(self)?.ok_or("Missing right value in add")?;
+        self.binary_op_check(lv, rv, Box::new(AddOp))
     }
 
     fn visit_sub(&mut self, node: &Node) -> ResultValue {
@@ -211,18 +195,18 @@ impl<'src> Visitor<'src> for SemanticAnalyzer {
         let [ref l, ref r] = node.children.as_ref().unwrap()[..] else {
             return Err("Muliplication expects 2 children".to_string());
         };
-        let lv = l.visit(self)?.ok_or("Missing left value in sub")?;
-        let rv = r.visit(self)?.ok_or("Missing right value in sub")?;
-        self.binary_op_check(lv, rv, Box::new(SubOp))
+        let lv = l.visit(self)?.ok_or("Missing left value in mult")?;
+        let rv = r.visit(self)?.ok_or("Missing right value in mult")?;
+        self.binary_op_check(lv, rv, Box::new(MultOp))
     }
 
     fn visit_div(&mut self, node: &Node) -> ResultValue {
         let [ref l, ref r] = node.children.as_ref().unwrap()[..] else {
             return Err("Division expects 2 children".to_string());
         };
-        let lv = l.visit(self)?.ok_or("Missing left value in sub")?;
-        let rv = r.visit(self)?.ok_or("Missing right value in sub")?;
-        self.binary_op_check(lv, rv, Box::new(SubOp))
+        let lv = l.visit(self)?.ok_or("Missing left value in div")?;
+        let rv = r.visit(self)?.ok_or("Missing right value in div")?;
+        self.binary_op_check(lv, rv, Box::new(DivOp))
     }
 
     fn visit_eq(&mut self, node: &Node) -> ResultValue {
@@ -316,30 +300,25 @@ impl<'src> Visitor<'src> for SemanticAnalyzer {
     }
 
     fn visit_fn_call(&mut self, node: &Node, fn_name: &'src str) -> ResultValue {
-        let [ref args_node] = node.children.as_ref().unwrap()[..] else {
-            return Err("Function call requires 1 children".to_string());
+        let func = match self.func_table.get(fn_name).cloned() {
+            Some(f) => f,
+            None => {
+                self.errors.push(format!("Function '{}' not found", fn_name));
+                return Ok(None);
+            }
         };
 
-        let func = self.func_table.get(fn_name).cloned();
-        if func.is_none() {
-            self.errors
-                .push(format!("Function '{}' not found", fn_name));
-            return Ok(None);
-        }
-
-        let callable = func.unwrap();
-
         let mut args = Vec::new();
-        if let Some(arg_nodes) = &args_node.children {
-            for arg_node in arg_nodes {
-                let arg = arg_node.visit(self)?;
+        if let Some(children) = &node.children {
+            for child in children {
+                let arg = child.visit(self)?;
                 if let Some(val) = arg {
                     args.push(val);
                 }
             }
         }
 
-        if let Err(err) = callable.check(&args) {
+        if let Err(err) = func.check(&args) {
             self.errors
                 .push(format!("Function '{}' argument error: {}", fn_name, err));
             return Ok(None);
@@ -349,6 +328,8 @@ impl<'src> Visitor<'src> for SemanticAnalyzer {
     }
 
     fn visit_fn(&mut self, node: &Node, name: &'src str) -> ResultValue {
+        self.sym_table.push_scope();
+
         let children = node.children.as_ref().unwrap();
 
         let (params_node, _ret_type_opt, body_node) = match children.as_slice() {
@@ -370,8 +351,9 @@ impl<'src> Visitor<'src> for SemanticAnalyzer {
                     };
                     params.push(Param {
                         name: param_name.to_string(),
-                        var_type: param_type,
+                        var_type: param_type.clone(),
                     });
+                    self.sym_table.set(param_name.to_string(), param_type);
                 } else {
                     return Err("Invalid node in parameter list".to_string());
                 }
@@ -387,6 +369,8 @@ impl<'src> Visitor<'src> for SemanticAnalyzer {
         let _ = body_node.visit(self);
 
         self.func_table.insert(name.to_string(), Rc::new(func));
+
+        self.sym_table.pop_scope();
         Ok(None)
     }
 }
