@@ -1,11 +1,12 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use inkwell::context::Context;
 use inkwell::module::Module;
 use inkwell::builder::Builder;
-use inkwell::values::{FunctionValue, IntValue, PointerValue};
+use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue};
 use inkwell::types::BasicMetadataTypeEnum;
 use inkwell::IntPredicate;
+use inkwell::AddressSpace;
 
 use crate::core::codegen::ir::{BinaryOperator, TACInstruction, UnaryOperator};
 
@@ -86,6 +87,10 @@ impl LlvmBackend {
         }
     }
 
+    fn is_string_literal(value: &str, variables: &HashMap<String, PointerValue>) -> bool {
+        !Self::is_constant(value) && !variables.contains_key(value)
+    }
+
     fn resolve_value<'ctx>(
         value: &str,
         builder: &Builder<'ctx>,
@@ -105,6 +110,13 @@ impl LlvmBackend {
         }
     }
 
+    fn declare_printf<'ctx>(context: &'ctx Context, module: &Module<'ctx>) -> FunctionValue<'ctx> {
+        let i32_type = context.i32_type();
+        let ptr_type = context.ptr_type(AddressSpace::default());
+        let printf_type = i32_type.fn_type(&[ptr_type.into()], true);
+        module.add_function("printf", printf_type, Some(inkwell::module::Linkage::External))
+    }
+
     fn build_function<'ctx>(
         context: &'ctx Context,
         module: &Module<'ctx>,
@@ -112,20 +124,24 @@ impl LlvmBackend {
         fn_value: FunctionValue<'ctx>,
         body: &[TACInstruction],
         all_functions: &HashMap<&str, FunctionValue<'ctx>>,
+        printf_fn: FunctionValue<'ctx>,
+        fmt_int: PointerValue<'ctx>,
+        fmt_str: PointerValue<'ctx>,
     ) {
         let entry = context.append_basic_block(fn_value, "entry");
         builder.position_at_end(entry);
 
         let i64_type = context.i64_type();
+        let ptr_type = context.ptr_type(AddressSpace::default());
         let vars = Self::collect_variables(body);
         let mut variables: HashMap<String, PointerValue<'ctx>> = HashMap::new();
+        let mut string_vars: HashSet<String> = HashSet::new();
 
         for var in &vars {
             let alloca = builder.build_alloca(i64_type, var).unwrap();
             variables.insert(var.clone(), alloca);
         }
 
-        // Store function parameters into their corresponding variables
         for (i, param) in fn_value.get_params().iter().enumerate() {
             let param_name = format!("param_{}", i);
             if let Some(ptr) = variables.get(&param_name) {
@@ -133,14 +149,28 @@ impl LlvmBackend {
             }
         }
 
-        let mut pending_args: Vec<IntValue<'ctx>> = Vec::new();
+        let mut pending_args: Vec<BasicValueEnum<'ctx>> = Vec::new();
+        let mut pending_is_string: Vec<bool> = Vec::new();
 
         for inst in body {
             match inst {
                 TACInstruction::Assign(dest, src) => {
-                    let val = Self::resolve_value(src, builder, &variables, context);
-                    if let Some(ptr) = variables.get(dest.as_str()) {
-                        builder.build_store(*ptr, val).unwrap();
+                    if Self::is_string_literal(src, &variables) {
+                        let str_global = builder.build_global_string_ptr(src, &format!("str_{}", dest)).unwrap();
+                        let str_ptr = str_global.as_pointer_value();
+                        let ptr_as_int = builder.build_ptr_to_int(str_ptr, i64_type, "ptr_to_int").unwrap();
+                        if let Some(ptr) = variables.get(dest.as_str()) {
+                            builder.build_store(*ptr, ptr_as_int).unwrap();
+                        }
+                        string_vars.insert(dest.clone());
+                    } else {
+                        let val = Self::resolve_value(src, builder, &variables, context);
+                        if let Some(ptr) = variables.get(dest.as_str()) {
+                            builder.build_store(*ptr, val).unwrap();
+                        }
+                        if string_vars.contains(src) {
+                            string_vars.insert(dest.clone());
+                        }
                     }
                 }
                 TACInstruction::BinaryOp(dest, op, left, right) => {
@@ -203,16 +233,24 @@ impl LlvmBackend {
                     }
                 }
                 TACInstruction::Param(val) => {
+                    let is_str = string_vars.contains(val);
                     let arg = Self::resolve_value(val, builder, &variables, context);
-                    pending_args.push(arg);
+                    pending_args.push(arg.into());
+                    pending_is_string.push(is_str);
                 }
                 TACInstruction::Call(name, _) => {
-                    if let Some(callee) = all_functions.get(name.as_str()) {
-                        let args: Vec<BasicMetadataTypeEnum> = pending_args
-                            .iter()
-                            .map(|_| i64_type.into())
-                            .collect();
-                        let _ = args;
+                    if name == "print" && !pending_args.is_empty() {
+                        let is_str = pending_is_string.first().copied().unwrap_or(false);
+                        let arg = pending_args[0];
+                        if is_str {
+                            let str_ptr = builder.build_int_to_ptr(
+                                arg.into_int_value(), ptr_type, "int_to_ptr"
+                            ).unwrap();
+                            builder.build_call(printf_fn, &[fmt_str.into(), str_ptr.into()], "printf_call").unwrap();
+                        } else {
+                            builder.build_call(printf_fn, &[fmt_int.into(), arg.into()], "printf_call").unwrap();
+                        }
+                    } else if let Some(callee) = all_functions.get(name.as_str()) {
                         let call_args: Vec<inkwell::values::BasicMetadataValueEnum> = pending_args
                             .iter()
                             .map(|a| (*a).into())
@@ -220,9 +258,21 @@ impl LlvmBackend {
                         builder.build_call(*callee, &call_args, "call").unwrap();
                     }
                     pending_args.clear();
+                    pending_is_string.clear();
                 }
                 TACInstruction::CallAssign(dest, name, _) => {
-                    if let Some(callee) = all_functions.get(name.as_str()) {
+                    if name == "print" && !pending_args.is_empty() {
+                        let is_str = pending_is_string.first().copied().unwrap_or(false);
+                        let arg = pending_args[0];
+                        if is_str {
+                            let str_ptr = builder.build_int_to_ptr(
+                                arg.into_int_value(), ptr_type, "int_to_ptr"
+                            ).unwrap();
+                            builder.build_call(printf_fn, &[fmt_str.into(), str_ptr.into()], "printf_call").unwrap();
+                        } else {
+                            builder.build_call(printf_fn, &[fmt_int.into(), arg.into()], "printf_call").unwrap();
+                        }
+                    } else if let Some(callee) = all_functions.get(name.as_str()) {
                         let call_args: Vec<inkwell::values::BasicMetadataValueEnum> = pending_args
                             .iter()
                             .map(|a| (*a).into())
@@ -238,6 +288,7 @@ impl LlvmBackend {
                         }
                     }
                     pending_args.clear();
+                    pending_is_string.clear();
                 }
                 TACInstruction::Return(Some(val)) => {
                     let ret_val = Self::resolve_value(val, builder, &variables, context);
@@ -263,6 +314,20 @@ impl CodegenBackend for LlvmBackend {
         let builder = context.create_builder();
         let i64_type = context.i64_type();
 
+        let printf_fn = Self::declare_printf(&context, &module);
+
+        let fmt_int_bytes = context.const_string(b"%ld\n", true);
+        let fmt_int_global = module.add_global(fmt_int_bytes.get_type(), None, "fmt_int");
+        fmt_int_global.set_initializer(&fmt_int_bytes);
+        fmt_int_global.set_constant(true);
+        let fmt_int = fmt_int_global.as_pointer_value();
+
+        let fmt_str_bytes = context.const_string(b"%s\n", true);
+        let fmt_str_global = module.add_global(fmt_str_bytes.get_type(), None, "fmt_str");
+        fmt_str_global.set_initializer(&fmt_str_bytes);
+        fmt_str_global.set_constant(true);
+        let fmt_str = fmt_str_global.as_pointer_value();
+
         let fn_names = Self::collect_functions(instructions);
         let mut all_functions: HashMap<&str, FunctionValue> = HashMap::new();
 
@@ -276,7 +341,10 @@ impl CodegenBackend for LlvmBackend {
 
         for (name, body) in &function_bodies {
             if let Some(fn_value) = all_functions.get(name) {
-                Self::build_function(&context, &module, &builder, *fn_value, body, &all_functions);
+                Self::build_function(
+                    &context, &module, &builder, *fn_value, body,
+                    &all_functions, printf_fn, fmt_int, fmt_str,
+                );
             }
         }
 
