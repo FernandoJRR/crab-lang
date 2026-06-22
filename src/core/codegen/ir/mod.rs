@@ -37,7 +37,7 @@ pub enum BinaryOperator {
     Or,  // Logical OR
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum TACInstruction {
     Assign(String, String),
     BinaryOp(String, BinaryOperator, String, String), // temp_res, op, arg1, arg2

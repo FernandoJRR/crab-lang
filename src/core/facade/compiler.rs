@@ -1,17 +1,38 @@
-use crate::core::{analyzer::{self}, codegen::ir::TACGenerator};
+use crate::core::{
+    analyzer::{self},
+    codegen::{
+        assembly::{x86::X86Backend, CodegenContext},
+        ir::TACGenerator,
+        optimizer::{
+            constant_folding::ConstantFoldingPass,
+            constant_propagation::ConstantPropagationPass,
+            dead_code_elimination::DeadCodeEliminationPass,
+            OptimizerPipeline,
+        },
+    },
+};
 
 use super::sem_analyzer::SemanticAnalyzer;
 
 pub struct CompilerFacade {
     sem_analyser: SemanticAnalyzer,
     tac_generator: TACGenerator,
+    optimizer: OptimizerPipeline,
+    codegen: CodegenContext,
 }
 
 impl CompilerFacade {
     pub fn new() -> Self {
+        let mut optimizer = OptimizerPipeline::new();
+        optimizer.add_pass(Box::new(ConstantPropagationPass));
+        optimizer.add_pass(Box::new(ConstantFoldingPass));
+        optimizer.add_pass(Box::new(DeadCodeEliminationPass));
+
         Self {
             sem_analyser: SemanticAnalyzer::new(),
-            tac_generator: TACGenerator::new()
+            tac_generator: TACGenerator::new(),
+            optimizer,
+            codegen: CodegenContext::new(Box::new(X86Backend)),
         }
     }
 
@@ -29,10 +50,10 @@ impl CompilerFacade {
 
                     self.tac_generator.generate(result);
 
-                    let tac_instructions = self.tac_generator.get_instructions();
-                    for inst in tac_instructions {
-                        println!("{}", inst);
-                    }
+                    let tac_instructions = self.tac_generator.get_instructions().clone();
+                    let optimized = self.optimizer.run(tac_instructions);
+                    let assembly = self.codegen.generate(&optimized);
+                    println!("{}", assembly);
                 }
                 Err(error) => panic!("{error}"),
                 _ => panic!("Unexpected")
